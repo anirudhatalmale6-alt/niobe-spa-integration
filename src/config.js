@@ -14,5 +14,5 @@ export const CONFIG = {
   demoMode: String(process.env.DEMO_MODE ?? 'true').toLowerCase() === 'true',
   base: process.env.SIMPLESPA_BASE || 'https://my.simplespa.com/api/v1',
   port: Number(process.env.PORT || 3000),
-  lowStockThreshold: Number(process.env.LOW_STOCK_THRESHOLD || 5),
+  lowStockThreshold: Number(process.env.LOW_STOCK_THRESHOLD || 2),
 };

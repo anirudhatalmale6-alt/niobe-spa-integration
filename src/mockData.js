@@ -27,19 +27,22 @@ function seeded(branchId, sku) {
   return (h >>> 0);
 }
 
-// A handful of intentional gaps/low-stock so the staff view has something to flag.
+// A handful of intentional gaps so the staff view has something to flag.
+// Niobe stock a max of ~3 units per product (limited shelf space), so demo qtys stay 0–3.
 const FORCED = {
-  'east_legon:MUR-VITC-SERUM': 2,
   'cantonments:ELE-MARINE-CREAM': 0,
-  'african_regent:LOR-METAL-DX': 1,
   'hfc_c18:OPI-BIG-APPLE': 0,
-  'alisa_hotel:NIO-SCRUB': 3,
+  'african_regent:MUR-CLARIFY': 0,
+  'east_legon:MUR-VITC-SERUM': 1,
+  'alisa_hotel:NIO-SCRUB': 1,
 };
 
 export function mockBranchProducts(branch) {
   return CATALOGUE.map((item) => {
     const forcedKey = `${branch.id}:${item.sku}`;
-    const stock = forcedKey in FORCED ? FORCED[forcedKey] : seeded(branch.id, item.sku) % 26;
+    // Gift cards are unlimited; everything else is 0–3 to match real shelf capacity.
+    const base = item.label === 'Gift Cards' ? (seeded(branch.id, item.sku) % 3) + 1 : seeded(branch.id, item.sku) % 4;
+    const stock = forcedKey in FORCED ? FORCED[forcedKey] : base;
     return {
       product_id: `${branch.id}-${item.sku}`,
       name: item.name,
