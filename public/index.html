@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Niobe Beauty — Cross-Branch Stock</title>
+<style>
+  :root{
+    --bg:#f6f1ec; --card:#fffdfb; --ink:#2b2320; --muted:#8b7d73;
+    --line:#e9ddd2; --gold:#b08a54; --gold-deep:#8a6a3c;
+    --ok:#3f7d5b; --low:#c98a2b; --out:#b5493f;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--ink)}
+  header{background:linear-gradient(120deg,#2b2320,#3a2f28);color:#f6efe6;padding:20px 26px}
+  .brand{display:flex;align-items:center;gap:12px}
+  .brand h1{margin:0;font-size:20px;font-weight:600;letter-spacing:.3px}
+  .brand .dot{width:10px;height:10px;border-radius:50%;background:var(--gold)}
+  .sub{color:#d8c7b3;font-size:13px;margin-top:2px}
+  .wrap{max-width:1180px;margin:0 auto;padding:20px}
+  .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:18px 0}
+  .tile{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .tile .n{font-size:26px;font-weight:700}
+  .tile .l{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-top:2px}
+  .tile.low .n{color:var(--low)} .tile.out .n{color:var(--out)}
+  .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px}
+  input[type=search],select{padding:9px 12px;border:1px solid var(--line);border-radius:9px;background:#fff;font-size:14px;color:var(--ink)}
+  input[type=search]{flex:1;min-width:200px}
+  .banner{background:#fbf4e8;border:1px solid #ecdcbf;color:#7a5c25;padding:8px 12px;border-radius:9px;font-size:13px;margin-bottom:12px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  .tblwrap{overflow-x:auto}
+  table{border-collapse:collapse;width:100%;font-size:14px;min-width:820px}
+  th,td{padding:11px 12px;text-align:left;border-bottom:1px solid var(--line)}
+  thead th{background:#f3e9dd;color:#6a5a4c;font-size:12px;text-transform:uppercase;letter-spacing:.5px;position:sticky;top:0}
+  th.num,td.num{text-align:center}
+  tbody tr:hover{background:#fbf6f0}
+  .pname{font-weight:600}
+  .sku{color:var(--muted);font-size:12px}
+  .tag{display:inline-block;font-size:11px;color:var(--gold-deep);background:#f4ead9;border:1px solid #ecdcbf;padding:1px 8px;border-radius:20px}
+  .q{display:inline-block;min-width:26px;padding:2px 8px;border-radius:7px;font-weight:600;font-size:13px}
+  .q.ok{color:var(--ok);background:#e9f3ec} .q.low{color:var(--low);background:#fbf1df} .q.zero{color:var(--out);background:#f8e9e7}
+  .total{font-weight:700}
+  .pill{font-size:11px;padding:2px 9px;border-radius:20px;font-weight:600}
+  .pill.low{color:var(--low);background:#fbf1df} .pill.out{color:var(--out);background:#f8e9e7} .pill.ok{color:var(--ok);background:#e9f3ec}
+  footer{color:var(--muted);font-size:12px;text-align:center;padding:18px}
+  .branchstat{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+  .bs{font-size:12px;padding:3px 10px;border-radius:20px;border:1px solid var(--line);background:#fff;color:var(--ink)}
+  .bs .d{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px}
+  .bs.ok .d{background:var(--ok)} .bs.err .d{background:var(--out)}
+  @media(max-width:720px){.tiles{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap" style="padding:0">
+    <div class="brand"><span class="dot"></span><h1>Niobe Beauty — Cross-Branch Stock</h1></div>
+    <div class="sub" id="subline">Live product inventory across all branches</div>
+    <div class="branchstat" id="branchstat"></div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div id="demoBanner" class="banner" style="display:none">
+    Preview mode — showing sample inventory in the real SimpleSpa format. Live branch data switches on the moment API secrets are added.
+  </div>
+
+  <div class="tiles">
+    <div class="tile"><div class="n" id="t-products">–</div><div class="l">Distinct products</div></div>
+    <div class="tile"><div class="n" id="t-units">–</div><div class="l">Total units in stock</div></div>
+    <div class="tile low"><div class="n" id="t-low">–</div><div class="l">Low at a branch</div></div>
+    <div class="tile out"><div class="n" id="t-out">–</div><div class="l">Out at a branch</div></div>
+  </div>
+
+  <div class="controls">
+    <input type="search" id="q" placeholder="Search product or SKU…" />
+    <select id="cat"><option value="">All categories</option></select>
+    <select id="avail">
+      <option value="">All availability</option>
+      <option value="low">Low at a branch</option>
+      <option value="out">Out at a branch</option>
+    </select>
+  </div>
+
+  <div class="card">
+    <div class="tblwrap">
+      <table>
+        <thead><tr id="head"></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </div>
+  <footer id="foot"></footer>
+</div>
+
+<script>
+let DATA = null;
+const $ = (s) => document.querySelector(s);
+
+function qClass(qty, threshold){ if(qty===0) return 'zero'; if(qty<=threshold) return 'low'; return 'ok'; }
+
+function render(){
+  if(!DATA) return;
+  const q = $('#q').value.trim().toLowerCase();
+  const cat = $('#cat').value;
+  const avail = $('#avail').value;
+  const branches = DATA.branches;
+  const th = DATA.lowStockThreshold;
+
+  const rows = DATA.products.filter(p=>{
+    if(cat && p.label!==cat) return false;
+    if(avail==='low' && !p.anyLow) return false;
+    if(avail==='out' && !p.anyOut) return false;
+    if(q && !(p.name.toLowerCase().includes(q) || (p.sku||'').toLowerCase().includes(q))) return false;
+    return true;
+  });
+
+  // header
+  $('#head').innerHTML = '<th>Product</th><th>Category</th>' +
+    branches.map(b=>`<th class="num">${b.name}</th>`).join('') +
+    '<th class="num">Total</th><th class="num">Status</th>';
+
+  // body
+  $('#rows').innerHTML = rows.map(p=>{
+    const cells = branches.map(b=>{
+      const q = p.byBranch[b.id]?.qty ?? 0;
+      return `<td class="num"><span class="q ${qClass(q,th)}">${q}</span></td>`;
+    }).join('');
+    const pill = p.anyOut ? `<span class="pill out" title="Out at: ${p.outBranches.join(', ')}">Out ·${p.outBranches.length}</span>`
+      : p.anyLow ? `<span class="pill low" title="Low at: ${p.lowBranches.join(', ')}">Low ·${p.lowBranches.length}</span>`
+      : '<span class="pill ok">OK</span>';
+    return `<tr>
+      <td><div class="pname">${p.name}</div><div class="sku">${p.sku||''}</div></td>
+      <td><span class="tag">${p.label}</span></td>
+      ${cells}
+      <td class="num total">${p.total}</td>
+      <td class="num">${pill}</td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="99" style="padding:26px;text-align:center;color:#8b7d73">No products match your filters.</td></tr>`;
+
+  $('#foot').textContent = `${rows.length} of ${DATA.products.length} products · generated ${new Date(DATA.generatedAt).toLocaleString()}`;
+}
+
+async function load(){
+  const r = await fetch('/api/stock'); DATA = await r.json();
+  $('#t-products').textContent = DATA.summary.distinctProducts;
+  $('#t-units').textContent = DATA.summary.totalUnits.toLocaleString();
+  $('#t-low').textContent = DATA.summary.lowAtBranch;
+  $('#t-out').textContent = DATA.summary.outAtBranch;
+  $('#subline').textContent = `Live product inventory across ${DATA.branches.length} branches · low-stock threshold ≤ ${DATA.lowStockThreshold}`;
+  $('#demoBanner').style.display = DATA.demoMode ? 'block' : 'none';
+
+  const cats = [...new Set(DATA.products.map(p=>p.label))].sort();
+  $('#cat').insertAdjacentHTML('beforeend', cats.map(c=>`<option>${c}</option>`).join(''));
+
+  $('#branchstat').innerHTML = DATA.branches.map(b=>
+    `<span class="bs ${b.ok?'ok':'err'}"><span class="d"></span>${b.name}${b.ok?'':' — '+(b.error||'unavailable')}</span>`).join('');
+
+  ['#q','#cat','#avail'].forEach(s=>$(s).addEventListener('input',render));
+  render();
+}
+load();
+</script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "name": "niobe-integration",
+  "version": "0.1.0",
+  "description": "Niobe Beauty — unified multi-branch layer over the SimpleSpa Enterprise API (cross-branch product stock, unified availability, Paystack deposits).",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {}
+}
