@@ -1,0 +1,39 @@
+import { CONFIG } from './config.js';
+
+// Deposit rule (Niobe): a customer must pay a MINIMUM of 50% of the service price
+// to secure the slot, or they may pay in full. Same across all services and branches.
+// Exception: if the booking is covered by a gift card or existing account credit,
+// no upfront online payment is collected — the slot is already secured.
+export function depositOptions(servicePrice, { giftCardOrCredit = false } = {}) {
+  const price = Math.round(Number(servicePrice) * 100) / 100;
+  if (giftCardOrCredit) {
+    return { price, exempt: true, reason: 'gift_card_or_credit', options: [] };
+  }
+  const pct = CONFIG.depositMinPercent;
+  const half = Math.round(price * (pct / 100) * 100) / 100;
+  return {
+    price,
+    exempt: false,
+    options: [
+      { id: 'deposit', label: `Pay ${pct}% deposit`, amount: half },
+      { id: 'full',    label: 'Pay in full',          amount: price },
+    ],
+  };
+}
+
+// Validate a chosen amount against the rule (guards against tampering with the pay link).
+export function isAmountAllowed(servicePrice, amount) {
+  const price = Number(servicePrice);
+  const min = Math.round(price * (CONFIG.depositMinPercent / 100) * 100) / 100;
+  const a = Number(amount);
+  return a >= min - 0.001 && a <= price + 0.001;
+}
+
+// A unique, human-readable payment reference that also appears in SimpleSpa's audit log.
+let seq = 0;
+export function makeReference(branchId, appointmentId) {
+  seq = (seq + 1) % 100000;
+  const t = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
+  const b = String(branchId || 'br').slice(0, 4).toUpperCase();
+  return `NIOBE-${b}-${appointmentId}-${t}${String(seq).padStart(3, '0')}`;
+}

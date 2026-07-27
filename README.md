@@ -11,9 +11,22 @@ into one seamless experience.
    per-branch low/out-of-stock flags.
 2. **Unified booking availability** *(next)* — merged services / therapists / slots across all
    branches, filterable by service, therapist or date.
-3. **Deposit payments + auto-confirm** *(next)* — Paystack pay-link (cards, mobile money, bank
-   transfer) for part/full upfront payment; on funds cleared the booking is auto-confirmed in
-   SimpleSpa via the Appointment-Status write endpoint, stamped with the unique payment reference.
+3. **Deposit payments + auto-confirm** *(built — test mode)* — Paystack pay-link (cards, mobile
+   money, bank transfer) for a minimum 50% deposit or full payment; on funds cleared the booking
+   is auto-confirmed in SimpleSpa via the Appointment-Status write endpoint (status 20), stamped
+   with the unique payment reference. Bookings covered by a gift card / account credit skip the
+   deposit. `PAYSTACK_DEMO=true` runs the whole flow against a local simulator so it can be proven
+   before live keys exist.
+
+### Deposit flow endpoints
+
+| Route | Description |
+| --- | --- |
+| `GET /pay?booking=<id>` | Customer-facing deposit page (choose 50% or full). |
+| `POST /pay/start` | Creates the Paystack transaction and redirects to the pay link. |
+| `GET /pay/callback` | Verifies payment, auto-confirms the SimpleSpa appointment, shows result. |
+| `POST /webhook/paystack` | Live webhook (HMAC-SHA512 signature verified) — auto-confirms on `charge.success`. |
+| `GET /demo/checkout`, `POST /demo/pay` | Simulated Paystack checkout (demo mode only). |
 
 ## How the stock module works
 
