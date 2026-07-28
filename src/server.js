@@ -53,7 +53,7 @@ const server = createServer(async (req, res) => {
       // Direct booking id (chooser links use this)
       const bookingId = url.searchParams.get('booking');
       if (bookingId) {
-        const bd = bookingDeposit(bookingId);
+        const bd = await bookingDeposit(bookingId);
         if (!bd) return html(res, 404, 'Booking not found');
         return html(res, 200, renderPayPage(bd));
       }
@@ -62,8 +62,8 @@ const server = createServer(async (req, res) => {
       const branchName = branchById(b)?.name;
       const ph = url.searchParams.get('ph');
       if (!ph) return html(res, 200, renderPhoneEntry(b, branchName));
-      const matches = lookupBookings({ branchId: b, phone: ph });
-      if (matches.length === 1) return html(res, 200, renderPayPage(bookingDeposit(matches[0].id)));
+      const matches = await lookupBookings({ branchId: b, phone: ph });
+      if (matches.length === 1) return html(res, 200, renderPayPage(await bookingDeposit(matches[0].id)));
       if (matches.length > 1) return html(res, 200, renderChooser(matches, branchName));
       return html(res, 200, renderNoMatch(b, branchName));
     }
@@ -75,7 +75,7 @@ const server = createServer(async (req, res) => {
     if (req.method === 'GET' && p === '/demo/checkout') {
       const pay = getPayment(url.searchParams.get('reference'));
       if (!pay) return html(res, 404, 'Unknown reference');
-      return html(res, 200, renderCheckout(pay, getBooking(pay.bookingId)));
+      return html(res, 200, renderCheckout(pay, await getBooking(pay.bookingId)));
     }
     if (req.method === 'POST' && p === '/demo/pay') {
       const body = parseBody(await readBody(req), req.headers['content-type']);
