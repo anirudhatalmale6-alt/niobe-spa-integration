@@ -126,7 +126,9 @@ export async function lookupBookings({ branchId, phone }) {
   const out = [];
   for (const a of appts) {
     if (SETTLED_STATUS.has(Number(a.status))) continue;   // already confirmed/paid/cancelled
-    if (last9(a.client?.mobile) === ph) out.push(await toBooking(branch, a));
+    if (last9(a.client?.mobile) !== ph) continue;
+    const bk = await toBooking(branch, a);
+    if (bk.price > 0) out.push(bk);                        // no deposit to collect on a price-less booking
   }
   return out;
 }
