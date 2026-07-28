@@ -10,7 +10,7 @@ const money = (n, cur = 'GHS') => cur === 'GHS'
   : `${SYMBOLS[cur] || cur + ' '}${Number(n).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const feeLine = CONFIG.customerPaysFees ? ' Any transaction fee is added at checkout and paid by the customer.' : '';
 
-const shell = (title, body, tag = `${GATEWAY} Test Mode`) => `<!doctype html><html lang="en"><head>
+const shell = (title, body, tag = CONFIG.paymentDemo ? `${GATEWAY} Test Mode` : '🔒 Secure checkout') => `<!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title>
 <style>
   :root{--bg:#f6f1ec;--card:#fffdfb;--ink:#2b2320;--muted:#8b7d73;--line:#e9ddd2;--gold:#b08a54;--gold-deep:#8a6a3c;--ok:#3f7d5b}
@@ -44,7 +44,7 @@ const shell = (title, body, tag = `${GATEWAY} Test Mode`) => `<!doctype html><ht
     padding:2px 9px;border-radius:20px;margin-left:6px}
   .center{text-align:center}
   .demoTag{position:fixed;top:10px;right:12px;font-size:11px;color:#7a5c25;background:#fbf4e8;border:1px solid #ecdcbf;padding:3px 9px;border-radius:20px}
-</style></head><body><div class="demoTag">${tag}</div>
+</style></head><body>${tag ? `<div class="demoTag">${tag}</div>` : ''}
 <div class="wrap">${body}</div></body></html>`;
 
 export function renderPayPage(bd) {
