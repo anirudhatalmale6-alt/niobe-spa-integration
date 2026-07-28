@@ -4,6 +4,10 @@ import { displayName as GATEWAY, displayNameOf, backup } from './gateway.js';
 import { CONFIG } from './config.js';
 
 const GHS = (n) => `GHS ${Number(n).toLocaleString('en-GH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const SYMBOLS = { GBP: '£', USD: '$', EUR: '€' };
+const money = (n, cur = 'GHS') => cur === 'GHS'
+  ? GHS(n)
+  : `${SYMBOLS[cur] || cur + ' '}${Number(n).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const feeLine = CONFIG.customerPaysFees ? ' Any transaction fee is added at checkout and paid by the customer.' : '';
 
 const shell = (title, body, tag = `${GATEWAY} Test Mode`) => `<!doctype html><html lang="en"><head>
@@ -70,6 +74,7 @@ export function renderPayPage(bd) {
         ${opts}
         <button class="btn" type="submit">Continue to secure payment</button>
         ${backup ? `<button class="btnAlt" type="submit" name="gateway" value="${backup}">Having trouble? Pay with ${displayNameOf(backup)} instead</button>` : ''}
+        ${CONFIG.intlCurrency ? `<button class="btnAlt" type="submit" name="gateway" value="international">Paying from abroad? Pay in ${CONFIG.intlCurrency}</button>` : ''}
       </form>
       <div class="note">Payments are processed securely by ${GATEWAY}${backup ? ` (or ${displayNameOf(backup)} as a backup)` : ''} — cards, mobile money and bank transfer.<br>A minimum of ${bd.options[0].amount ? Math.round((bd.options[0].amount / bd.price) * 100) : 50}% is required to hold your slot.${feeLine}</div>
     </div>`);
@@ -119,18 +124,26 @@ export function renderNoMatch(branchId, branchName) {
 
 export function renderCheckout(pay, booking) {
   const name = displayNameOf(pay.gateway);
+  const isIntl = pay.chargeCurrency && pay.chargeCurrency !== 'GHS';
+  const chargeStr = money(pay.chargeAmount ?? pay.amount, pay.chargeCurrency || 'GHS');
+  const amountRows = isIntl
+    ? `<div class="row"><span class="k">Your deposit (secures your slot)</span><span class="v">${GHS(pay.amount)}</span></div>
+       <div class="row"><span class="k">Charged to your card</span><span class="v">${chargeStr}</span></div>`
+    : `<div class="row"><span class="k">Amount</span><span class="v">${GHS(pay.amount)}</span></div>`;
   return shell(`${name} Test Checkout`, `
     <div class="brand"><div class="n">${name} <span class="badge">TEST</span></div><div class="t">Simulated secure checkout</div></div>
     <div class="card">
       <div class="row"><span class="k">Pay to</span><span class="v">Niobe Beauty</span></div>
       <div class="row"><span class="k">Customer</span><span class="v">${booking.customer.email}</span></div>
-      <div class="row"><span class="k">Amount</span><span class="v">${GHS(pay.amount)}</span></div>
+      ${amountRows}
       <div class="row"><span class="k">Reference</span><span class="v" style="font-family:ui-monospace,monospace;font-size:12px">${pay.reference}</span></div>
       <form method="POST" action="/demo/pay" style="margin-top:16px">
         <input type="hidden" name="reference" value="${pay.reference}">
-        <button class="btn" type="submit">Pay ${GHS(pay.amount)} now</button>
+        <button class="btn" type="submit">Pay ${chargeStr} now</button>
       </form>
-      <div class="note">This is a simulated ${name} screen for testing. With live keys it becomes the real ${name} checkout (Card / Mobile Money / Bank).${feeLine}</div>
+      <div class="note">${isIntl
+        ? `You're securing a ${GHS(pay.amount)} deposit for your appointment; your card is charged the equivalent in ${pay.chargeCurrency}, settled to Niobe's UK account. `
+        : `This is a simulated ${name} screen for testing. With live keys it becomes the real ${name} checkout (Card / Mobile Money / Bank). `}${feeLine}</div>
     </div>`, `${name} Test Mode`);
 }
 

@@ -8,8 +8,9 @@ import { CONFIG } from './config.js';
 import * as paystack from './paystack.js';
 import * as hubtel from './hubtel.js';
 import * as expresspay from './expresspay.js';
+import * as international from './international.js';
 
-const ADAPTERS = { paystack, hubtel, expresspay };
+const ADAPTERS = { paystack, hubtel, expresspay, international };
 
 const primaryName = ADAPTERS[CONFIG.gateway] ? CONFIG.gateway : 'hubtel';
 const backupName = ADAPTERS[CONFIG.gatewayBackup] && CONFIG.gatewayBackup !== primaryName
@@ -27,8 +28,12 @@ export async function initializeTransaction(opts, preferred) {
   const order = [];
   const add = (n) => { if (n && ADAPTERS[n] && !order.includes(n)) order.push(n); };
   add(preferred);
-  add(primaryName);
-  add(backupName);
+  // The international rail is a deliberate currency choice — never fall back to a GHS gateway,
+  // which is exactly what fails for foreign cards. Only the Ghana gateways failover to each other.
+  if (preferred !== 'international') {
+    add(primaryName);
+    add(backupName);
+  }
 
   let lastErr;
   for (const name of order) {

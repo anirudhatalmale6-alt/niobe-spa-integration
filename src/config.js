@@ -51,6 +51,12 @@ export const CONFIG = {
   // sandbox for test, https://expresspaygh.com/api for live
   expresspayBase: process.env.EXPRESSPAY_BASE || 'https://sandbox.expresspaygh.com/api',
 
+  // International rail (Option A) — foreign card charge in this currency, settled to the UK account.
+  intlCurrency: (process.env.INTL_CURRENCY || 'GBP').toUpperCase(),
+  // Buffer % applied to the FX-converted charge so conversion/rate movement doesn't leave a shortfall.
+  fxBufferPct: Number(process.env.FX_BUFFER_PCT ?? 3),
+  stripeUkSecret: process.env.STRIPE_UK_SECRET || '',
+
   currency: process.env.CURRENCY || 'GHS',
   // Deposit rule: minimum 50% or pay in full (same across all services/branches).
   depositMinPercent: Number(process.env.DEPOSIT_MIN_PERCENT || 50),

@@ -1,6 +1,7 @@
 import { depositOptions, isAmountAllowed, makeReference } from './deposit.js';
 import { initializeTransaction, verifyTransaction } from './gateway.js';
 import { confirmAppointment } from './confirm.js';
+import { convertFromGHS } from './fx.js';
 import { CONFIG } from './config.js';
 
 // In a live deployment a booking is created in SimpleSpa's own online-booking step; this
@@ -59,16 +60,24 @@ export async function startDeposit(bookingId, optionId, preferredGateway) {
   if (!isAmountAllowed(b.price, chosen.amount)) throw new Error('Amount below the required minimum');
 
   const reference = makeReference(b.branchId, b.appointment_id);
+  // For the international rail, show/charge in the foreign currency; deposit stays priced in GHS.
+  const charge = preferredGateway === 'international'
+    ? await convertFromGHS(chosen.amount, CONFIG.intlCurrency)
+    : { amount: chosen.amount, currency: 'GHS' };
+
   const init = await initializeTransaction({
     email: b.customer.email,
     amount: chosen.amount,
     reference,
+    chargeAmount: charge.amount,
+    chargeCurrency: charge.currency,
     callbackUrl: `${CONFIG.publicUrl}/pay/callback?reference=${encodeURIComponent(reference)}`,
     metadata: { bookingId: b.id, appointment_id: b.appointment_id, branchId: b.branchId, type: chosen.id,
       customerName: b.customer.name, customerPhone: b.customer.phone },
   }, preferredGateway);
 
-  payments.set(reference, { reference, bookingId: b.id, amount: chosen.amount, optionId: chosen.id, gateway: init.gateway, status: 'pending' });
+  payments.set(reference, { reference, bookingId: b.id, amount: chosen.amount, optionId: chosen.id,
+    gateway: init.gateway, chargeAmount: charge.amount, chargeCurrency: charge.currency, status: 'pending' });
   return { authorization_url: init.authorization_url, reference, amount: chosen.amount, gateway: init.gateway };
 }
 
