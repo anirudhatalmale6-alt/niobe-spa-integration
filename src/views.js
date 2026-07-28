@@ -148,21 +148,31 @@ export function renderCheckout(pay, booking) {
 }
 
 export function renderSuccess(result) {
-  const b = result.booking;
+  const b = result.booking || {};
+  const pay = result.payment || {};
+  const ref = b.paymentReference || pay.reference || '';
+  const paid = b.paidAmount ?? pay.amount;
+  const confirmed = result.confirm?.confirmed;
   const sim = result.confirm?.simulated;
+  const statusLine = confirmed || sim
+    ? `<div class="row"><span class="k">Booking status</span><span class="v" style="color:var(--ok)">Confirmed${sim ? ' · simulated' : ''}</span></div>`
+    : '';
+  const note = (confirmed || sim)
+    ? `Your appointment has been confirmed with the reference above stamped against it${sim ? '. (Live confirmation activates once write access is enabled.)' : '.'}`
+    : `Your deposit has been received and your slot is secured. The salon will finalise your booking — you'll be all set for your appointment. Please keep the reference above.`;
   return shell('Payment successful', `
-    <div class="brand"><div class="n">Niobe Beauty</div><div class="t">Booking confirmed</div></div>
+    <div class="brand"><div class="n">Niobe Beauty</div><div class="t">Payment received</div></div>
     <div class="card center">
       <div class="tick">✓</div>
       <h2>Payment received — you're all set</h2>
-      <div class="ref">${b.paymentReference}</div>
+      <div class="ref">${ref}</div>
       <div style="text-align:left;margin-top:8px">
-        <div class="row"><span class="k">Service</span><span class="v">${b.service}</span></div>
-        <div class="row"><span class="k">Branch</span><span class="v">${b.branchName}</span></div>
-        <div class="row"><span class="k">Date &amp; time</span><span class="v">${b.datetime}</span></div>
-        <div class="row"><span class="k">Paid</span><span class="v">${GHS(b.paidAmount)}</span></div>
-        <div class="row"><span class="k">SimpleSpa status</span><span class="v" style="color:var(--ok)">Confirmed (20)${sim ? ' · simulated' : ''}</span></div>
+        ${b.service ? `<div class="row"><span class="k">Service</span><span class="v">${b.service}</span></div>` : ''}
+        ${b.branchName ? `<div class="row"><span class="k">Branch</span><span class="v">${b.branchName}</span></div>` : ''}
+        ${b.datetime ? `<div class="row"><span class="k">Date &amp; time</span><span class="v">${b.datetime}</span></div>` : ''}
+        ${paid != null ? `<div class="row"><span class="k">Paid</span><span class="v">${GHS(paid)}</span></div>` : ''}
+        ${statusLine}
       </div>
-      <div class="note">Your appointment has been automatically confirmed in SimpleSpa with the reference above stamped against it${sim ? '. (Live confirmation activates once the branch API key is in Write mode.)' : '.'}</div>
+      <div class="note">${note}</div>
     </div>`);
 }

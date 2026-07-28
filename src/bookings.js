@@ -4,6 +4,23 @@ import { confirmAppointment } from './confirm.js';
 import { convertFromGHS } from './fx.js';
 import { CONFIG, branchById } from './config.js';
 import { ssPost } from './simplespa.js';
+import { appendFileSync, mkdirSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+// Durable record of every successful deposit — so a paid booking is never lost even if the
+// SimpleSpa auto-confirm write is unavailable at the time (write API not yet enabled, or a
+// transient error). Staff/we can reconcile from this and re-confirm once writes are on.
+const DATA_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
+function recordPaidDeposit(entry) {
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    appendFileSync(join(DATA_DIR, 'deposits.log'), JSON.stringify(entry) + '\n');
+  } catch { /* logging must never break the payment flow */ }
+  if (!entry.confirmed) {
+    console.log(`[deposit] PAID but NOT auto-confirmed (${entry.reason || ''}): ref=${entry.reference} branch=${entry.branchId} appt=${entry.appointment_id} amount=${entry.amount}`);
+  }
+}
 
 // A booking here is an existing SimpleSpa appointment that this service attaches a deposit
 // payment to. Live (DEMO_MODE=false) it is read from SimpleSpa's appointments.php by the
@@ -185,10 +202,22 @@ export async function finalizeDeposit(reference) {
   if (!v.success) { pay.status = 'failed'; return { ok: false, reason: 'payment_not_successful' }; }
   pay.status = 'paid';
 
-  const confirm = await confirmAppointment(b.branchId, b.appointment_id, reference);
-  b.status = 'confirmed';
-  b.paidAmount = pay.amount;
-  b.paymentReference = reference;
+  // Payment is now authoritative. Auto-confirm the SimpleSpa appointment; if the write can't
+  // go through (e.g. write API not enabled yet), confirmAppointment flags it rather than
+  // throwing, so the customer still gets a success page and the deposit is recorded.
+  const confirm = b
+    ? await confirmAppointment(b.branchId, b.appointment_id, reference)
+    : { confirmed: false, pending: true, reason: 'booking_not_found_at_finalize' };
+  if (b) {
+    b.status = confirm.confirmed ? 'confirmed' : 'paid_pending_confirm';
+    b.paidAmount = pay.amount;
+    b.paymentReference = reference;
+  }
+  recordPaidDeposit({
+    reference, branchId: b?.branchId, appointment_id: b?.appointment_id,
+    amount: pay.amount, gateway: pay.gateway, confirmed: !!confirm.confirmed,
+    reason: confirm.error || confirm.reason, at: new Date().toISOString(),
+  });
 
   return { ok: true, booking: b, payment: pay, confirm };
 }
