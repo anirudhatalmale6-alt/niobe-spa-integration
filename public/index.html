@@ -42,6 +42,7 @@
   .total{font-weight:700}
   .pill{font-size:11px;padding:2px 9px;border-radius:20px;font-weight:600}
   .pill.low{color:var(--low);background:#fbf1df} .pill.out{color:var(--out);background:#f8e9e7} .pill.ok{color:var(--ok);background:#e9f3ec}
+  .pill.oversold{color:#7a3a00;background:#f6e3cf;margin-left:4px} .q.zero.oversold{position:relative}
   footer{color:var(--muted);font-size:12px;text-align:center;padding:18px}
   .branchstat{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
   .bs{font-size:12px;padding:3px 10px;border-radius:20px;border:1px solid var(--line);background:#fff;color:var(--ink)}
@@ -122,12 +123,16 @@ function render(){
   // body
   $('#rows').innerHTML = rows.map(p=>{
     const cells = branches.map(b=>{
-      const q = p.byBranch[b.id]?.qty ?? 0;
+      const cell = p.byBranch[b.id];
+      const q = cell?.qty ?? 0;
+      // Oversold branches show 0 available (nothing to sell) with a marker + tooltip for staff.
+      if(cell?.oversold) return `<td class="num"><span class="q zero oversold" title="Oversold by ${-cell.raw} — inventory needs reconciling">0*</span></td>`;
       return `<td class="num"><span class="q ${qClass(q,th)}">${q}</span></td>`;
     }).join('');
-    const pill = p.anyOut ? `<span class="pill out" title="Out at: ${p.outBranches.join(', ')}">Out ·${p.outBranches.length}</span>`
+    const oversoldPill = p.anyOversold ? `<span class="pill oversold" title="Oversold at: ${p.oversoldBranches.join(', ')}">Oversold ·${p.oversoldBranches.length}</span>` : '';
+    const pill = (p.anyOut ? `<span class="pill out" title="Out at: ${p.outBranches.join(', ')}">Out ·${p.outBranches.length}</span>`
       : p.anyLow ? `<span class="pill low" title="Low at: ${p.lowBranches.join(', ')}">Low ·${p.lowBranches.length}</span>`
-      : '<span class="pill ok">OK</span>';
+      : '<span class="pill ok">OK</span>') + oversoldPill;
     return `<tr>
       <td><div class="pname">${p.name}</div><div class="sku">${p.sku||''}</div></td>
       <td><span class="tag">${p.label}</span></td>

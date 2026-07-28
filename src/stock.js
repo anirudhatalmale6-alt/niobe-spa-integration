@@ -45,8 +45,13 @@ export async function getConsolidatedStock() {
         });
       }
       const row = map.get(key);
-      const qty = Number(p.stock) || 0;
-      row.byBranch[branch.id] = { qty, product_id: p.product_id };
+      // SimpleSpa reports `stock` as a signed integer. A negative value means the branch is
+      // OVERSOLD (sales outran recorded inventory) — there is nothing on the shelf to sell, so
+      // availability is 0. Keep the raw figure so staff can see/reconcile the oversold amount,
+      // but never let a negative count inflate (understate) the sellable total.
+      const raw = Math.trunc(Number(p.stock)) || 0;
+      const qty = Math.max(0, raw);
+      row.byBranch[branch.id] = { qty, raw, oversold: raw < 0, product_id: p.product_id };
       row.total += qty;
       // Prefer a populated image / real price if the first branch lacked it.
       if (!row.image_url && p.image_url) row.image_url = p.image_url;
@@ -58,18 +63,23 @@ export async function getConsolidatedStock() {
   const products = [...map.values()]
     .map((row) => {
       // Flags are evaluated PER BRANCH — a stockout at one location is what staff need to see.
-      const seen = branchStatus.map((b) => row.byBranch[b.id]?.qty ?? 0);
+      // A branch that doesn't carry the item, one that carries it at zero, and one that is
+      // oversold (negative) are all "out" for the shopper; oversold is surfaced separately so
+      // staff can reconcile inventory.
       const outBranches = branchStatus.filter((b) => (row.byBranch[b.id]?.qty ?? 0) === 0).map((b) => b.name);
       const lowBranches = branchStatus.filter((b) => {
         const q = row.byBranch[b.id]?.qty ?? 0; return q > 0 && q <= th;
       }).map((b) => b.name);
+      const oversoldBranches = branchStatus.filter((b) => row.byBranch[b.id]?.oversold).map((b) => b.name);
       return {
         ...row,
         outBranches,
         lowBranches,
+        oversoldBranches,
         anyOut: outBranches.length > 0,
         anyLow: lowBranches.length > 0,
-        outOfStock: row.total === 0,          // out everywhere
+        anyOversold: oversoldBranches.length > 0,
+        outOfStock: row.total === 0,          // no sellable units at any branch
       };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -85,6 +95,7 @@ export async function getConsolidatedStock() {
       totalUnits: products.reduce((s, p) => s + p.total, 0),
       lowAtBranch: products.filter((p) => p.anyLow).length,
       outAtBranch: products.filter((p) => p.anyOut).length,
+      oversoldAtBranch: products.filter((p) => p.anyOversold).length,
     },
   };
 }
