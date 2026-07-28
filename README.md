@@ -15,10 +15,14 @@ into one seamless experience.
    money, bank transfer) for a minimum 50% deposit or full payment; on funds cleared the booking
    is auto-confirmed in SimpleSpa via the Appointment-Status write endpoint (status 20), stamped
    with the unique payment reference. Bookings covered by a gift card / account credit skip the
-   deposit. The gateway sits behind a thin adapter (`src/gateway.js`) — **Hubtel** (recommended for
-   Ghana: mobile money + cards) and **Paystack** are both supported and selected with a single
-   config value (`PAYMENT_GATEWAY`). `PAYMENT_DEMO=true` runs the whole flow against a local
-   simulator so it can be proven before live keys exist.
+   deposit. The gateway sits behind a thin adapter layer (`src/gateway.js`) — **Hubtel** (recommended
+   primary for Ghana: mobile money + cards), **expressPay** and **Paystack** are all supported.
+   `PAYMENT_GATEWAY` sets the primary and `PAYMENT_GATEWAY_BACKUP` sets a backup that is both
+   offered to the customer ("pay with expressPay instead") and used for **automatic failover** if
+   the primary is unreachable at checkout. Transaction fees are borne by the customer
+   (`CUSTOMER_PAYS_FEES` — the Ghana norm; set fee-bearer = customer at the gateway account level).
+   `PAYMENT_DEMO=true` runs the whole flow against a local simulator so it can be proven before
+   live keys exist.
 
 ### Deposit flow endpoints
 

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join, extname } from 'path';
 import { CONFIG } from './config.js';
 import { getConsolidatedStock } from './stock.js';
-import { getBooking, bookingDeposit, startDeposit, finalizeDeposit, listBookings } from './bookings.js';
+import { getBooking, bookingDeposit, startDeposit, finalizeDeposit, listBookings, getPayment } from './bookings.js';
 import { verifyWebhookSignature, parseWebhookEvent, displayName as gatewayName } from './gateway.js';
 import { renderPayPage, renderCheckout, renderSuccess } from './views.js';
 
@@ -44,13 +44,11 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === 'POST' && p === '/pay/start') {
       const body = parseBody(await readBody(req), req.headers['content-type']);
-      const { authorization_url } = await startDeposit(body.bookingId, body.option);
+      const { authorization_url } = await startDeposit(body.bookingId, body.option, body.gateway);
       return redirect(res, authorization_url);
     }
     if (req.method === 'GET' && p === '/demo/checkout') {
-      const ref = url.searchParams.get('reference');
-      const { getPayment } = await import('./bookings.js');
-      const pay = getPayment(ref);
+      const pay = getPayment(url.searchParams.get('reference'));
       if (!pay) return html(res, 404, 'Unknown reference');
       return html(res, 200, renderCheckout(pay, getBooking(pay.bookingId)));
     }
@@ -68,8 +66,11 @@ const server = createServer(async (req, res) => {
     // /webhook/payment is the generic route; /webhook/paystack kept as a backward-compatible alias.
     if (req.method === 'POST' && (p === '/webhook/payment' || p === '/webhook/paystack')) {
       const raw = await readBody(req);
-      if (!verifyWebhookSignature(raw, req.headers['x-paystack-signature'])) return json(res, 401, { error: 'bad signature' });
       const event = parseWebhookEvent(raw);
+      // The stored payment record is the authority on which gateway processed this reference.
+      const pay = event.reference ? getPayment(event.reference) : null;
+      const gw = pay?.gateway || event.gateway;
+      if (!verifyWebhookSignature(gw, raw, req.headers['x-paystack-signature'])) return json(res, 401, { error: 'bad signature' });
       if (event.isPaymentSuccess && event.reference) {
         // finalizeDeposit re-verifies the payment via the gateway's status API before confirming.
         try { await finalizeDeposit(event.reference); } catch (e) { /* logged; respond 200 so the gateway stops retrying */ }

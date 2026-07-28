@@ -23,12 +23,18 @@ export const CONFIG = {
   lowStockThreshold: Number(process.env.LOW_STOCK_THRESHOLD || 2),
 
   // --- Payments ---
-  // Active gateway: 'hubtel' (recommended for Ghana) or 'paystack'. The rest of the
-  // deposit/auto-confirm flow is gateway-independent — only the adapter changes.
+  // Primary gateway: 'hubtel' (recommended for Ghana), 'expresspay' or 'paystack'.
+  // The deposit/auto-confirm flow is gateway-independent — only the adapter changes.
   gateway: (process.env.PAYMENT_GATEWAY || 'hubtel').toLowerCase(),
+  // Backup gateway offered to the customer / used for automatic failover if the primary
+  // is unreachable. Set to '' to disable the backup option.
+  gatewayBackup: (process.env.PAYMENT_GATEWAY_BACKUP ?? 'expresspay').toLowerCase(),
   // paymentDemo = simulate the checkout locally (no live keys needed yet).
   // Falls back to the old PAYSTACK_DEMO flag for backward compatibility.
   paymentDemo: bool(process.env.PAYMENT_DEMO ?? process.env.PAYSTACK_DEMO, true),
+  // In Ghana the customer bears the transaction fee — set at the gateway account level
+  // (fee-bearer = customer), so the provider adds its exact fee on top of the deposit.
+  customerPaysFees: bool(process.env.CUSTOMER_PAYS_FEES, true),
 
   // Paystack credentials
   paystackSecret: process.env.PAYSTACK_SECRET_KEY || '',
@@ -38,6 +44,12 @@ export const CONFIG = {
   hubtelClientId: process.env.HUBTEL_CLIENT_ID || '',
   hubtelClientSecret: process.env.HUBTEL_CLIENT_SECRET || '',
   hubtelMerchantAccount: process.env.HUBTEL_MERCHANT_ACCOUNT || '',
+
+  // expressPay credentials (from the expressPay merchant dashboard)
+  expresspayMerchantId: process.env.EXPRESSPAY_MERCHANT_ID || '',
+  expresspayApiKey: process.env.EXPRESSPAY_API_KEY || '',
+  // sandbox for test, https://expresspaygh.com/api for live
+  expresspayBase: process.env.EXPRESSPAY_BASE || 'https://sandbox.expresspaygh.com/api',
 
   currency: process.env.CURRENCY || 'GHS',
   // Deposit rule: minimum 50% or pay in full (same across all services/branches).

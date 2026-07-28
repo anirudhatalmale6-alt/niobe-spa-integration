@@ -1,10 +1,12 @@
 // Server-rendered customer-facing pages for the deposit flow.
 // Shared styling with the staff dashboard (warm cream + gold Niobe palette).
-import { displayName as GATEWAY } from './gateway.js';
+import { displayName as GATEWAY, displayNameOf, backup } from './gateway.js';
+import { CONFIG } from './config.js';
 
 const GHS = (n) => `GHS ${Number(n).toLocaleString('en-GH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const feeLine = CONFIG.customerPaysFees ? ' Any transaction fee is added at checkout and paid by the customer.' : '';
 
-const shell = (title, body) => `<!doctype html><html lang="en"><head>
+const shell = (title, body, tag = `${GATEWAY} Test Mode`) => `<!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title>
 <style>
   :root{--bg:#f6f1ec;--card:#fffdfb;--ink:#2b2320;--muted:#8b7d73;--line:#e9ddd2;--gold:#b08a54;--gold-deep:#8a6a3c;--ok:#3f7d5b}
@@ -26,6 +28,9 @@ const shell = (title, body) => `<!doctype html><html lang="en"><head>
   .btn{display:block;width:100%;text-align:center;background:var(--gold-deep);color:#fff;border:0;border-radius:12px;
     padding:14px;font-size:15px;font-weight:600;cursor:pointer;text-decoration:none;margin-top:6px}
   .btn:hover{background:#7a5c33}
+  .btnAlt{display:block;width:100%;text-align:center;background:transparent;color:var(--gold-deep);border:1.5px solid var(--gold);
+    border-radius:12px;padding:11px;font-size:13px;font-weight:600;cursor:pointer;margin-top:9px}
+  .btnAlt:hover{background:#f7efe3}
   .note{font-size:12px;color:var(--muted);text-align:center;margin-top:14px;line-height:1.5}
   .tick{width:64px;height:64px;border-radius:50%;background:#e9f3ec;color:var(--ok);display:flex;align-items:center;
     justify-content:center;font-size:34px;margin:2px auto 12px}
@@ -35,7 +40,7 @@ const shell = (title, body) => `<!doctype html><html lang="en"><head>
     padding:2px 9px;border-radius:20px;margin-left:6px}
   .center{text-align:center}
   .demoTag{position:fixed;top:10px;right:12px;font-size:11px;color:#7a5c25;background:#fbf4e8;border:1px solid #ecdcbf;padding:3px 9px;border-radius:20px}
-</style></head><body><div class="demoTag">${GATEWAY} Test Mode</div>
+</style></head><body><div class="demoTag">${tag}</div>
 <div class="wrap">${body}</div></body></html>`;
 
 export function renderPayPage(bd) {
@@ -64,14 +69,16 @@ export function renderPayPage(bd) {
         <input type="hidden" name="bookingId" value="${b.id}">
         ${opts}
         <button class="btn" type="submit">Continue to secure payment</button>
+        ${backup ? `<button class="btnAlt" type="submit" name="gateway" value="${backup}">Having trouble? Pay with ${displayNameOf(backup)} instead</button>` : ''}
       </form>
-      <div class="note">Payments are processed securely by ${GATEWAY} — cards, mobile money and bank transfer.<br>A minimum of ${bd.options[0].amount ? Math.round((bd.options[0].amount / bd.price) * 100) : 50}% is required to hold your slot.</div>
+      <div class="note">Payments are processed securely by ${GATEWAY}${backup ? ` (or ${displayNameOf(backup)} as a backup)` : ''} — cards, mobile money and bank transfer.<br>A minimum of ${bd.options[0].amount ? Math.round((bd.options[0].amount / bd.price) * 100) : 50}% is required to hold your slot.${feeLine}</div>
     </div>`);
 }
 
 export function renderCheckout(pay, booking) {
-  return shell(`${GATEWAY} Test Checkout`, `
-    <div class="brand"><div class="n">${GATEWAY} <span class="badge">TEST</span></div><div class="t">Simulated secure checkout</div></div>
+  const name = displayNameOf(pay.gateway);
+  return shell(`${name} Test Checkout`, `
+    <div class="brand"><div class="n">${name} <span class="badge">TEST</span></div><div class="t">Simulated secure checkout</div></div>
     <div class="card">
       <div class="row"><span class="k">Pay to</span><span class="v">Niobe Beauty</span></div>
       <div class="row"><span class="k">Customer</span><span class="v">${booking.customer.email}</span></div>
@@ -81,8 +88,8 @@ export function renderCheckout(pay, booking) {
         <input type="hidden" name="reference" value="${pay.reference}">
         <button class="btn" type="submit">Pay ${GHS(pay.amount)} now</button>
       </form>
-      <div class="note">This is a simulated ${GATEWAY} screen for testing. With live test keys it becomes the real ${GATEWAY} checkout (Card / Mobile Money / Bank).</div>
-    </div>`);
+      <div class="note">This is a simulated ${name} screen for testing. With live keys it becomes the real ${name} checkout (Card / Mobile Money / Bank).${feeLine}</div>
+    </div>`, `${name} Test Mode`);
 }
 
 export function renderSuccess(result) {
