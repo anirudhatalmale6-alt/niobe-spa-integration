@@ -43,11 +43,13 @@ export function isAmountAllowed(servicePrice, amount, { requireFull = false } = 
   return a >= min - 0.001 && a <= price + 0.001;
 }
 
-// A unique, human-readable payment reference that also appears in SimpleSpa's audit log.
+// A short, unique payment reference (Hubtel caps clientReference length, so we keep it compact).
+// The appointment/branch it belongs to is held in our own payment record, and the reference is
+// also stamped into SimpleSpa's audit log via the confirm step. Format: NIOBE-<BR4>-<YYMMDDHHMMSS><seq>.
 let seq = 0;
-export function makeReference(branchId, appointmentId) {
-  seq = (seq + 1) % 100000;
-  const t = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
-  const b = String(branchId || 'br').slice(0, 4).toUpperCase();
-  return `NIOBE-${b}-${appointmentId}-${t}${String(seq).padStart(3, '0')}`;
+export function makeReference(branchId /* , appointmentId */) {
+  seq = (seq + 1) % 1000;
+  const t = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(2, 14); // YYMMDDHHMMSS
+  const b = String(branchId || 'br').replace(/[^a-z0-9]/gi, '').slice(0, 4).toUpperCase() || 'BR';
+  return `NIOBE-${b}-${t}${String(seq).padStart(3, '0')}`;
 }
