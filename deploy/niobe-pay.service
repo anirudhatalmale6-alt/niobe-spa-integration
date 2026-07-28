@@ -1,0 +1,20 @@
+[Unit]
+Description=Niobe Beauty SimpleSpa integration (stock + availability + deposits)
+After=network.target
+
+[Service]
+Type=simple
+User=niobe
+WorkingDirectory=/opt/niobe-integration
+# Config (SimpleSpa keys, Hubtel/expressPay creds, etc.) lives in /opt/niobe-integration/.env
+# and is loaded by the app itself (src/env.js). Never commit .env.
+ExecStart=/usr/bin/node src/server.js
+Restart=always
+RestartSec=3
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
