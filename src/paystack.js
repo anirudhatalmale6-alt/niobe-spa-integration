@@ -3,13 +3,15 @@ import { CONFIG } from './config.js';
 
 const PAYSTACK_API = 'https://api.paystack.co';
 
+export const displayName = 'Paystack';
+
 // Initialise a transaction and return the hosted payment link (authorization_url).
 // In demo mode this points at our own simulated checkout so the full flow can be
 // exercised end-to-end without live keys.
 export async function initializeTransaction({ email, amount, reference, metadata, callbackUrl }) {
   const amountMinor = Math.round(Number(amount) * 100); // GHS -> pesewas
 
-  if (CONFIG.paystackDemo) {
+  if (CONFIG.paymentDemo) {
     const url = `${CONFIG.publicUrl}/demo/checkout?reference=${encodeURIComponent(reference)}`;
     return { authorization_url: url, reference, demo: true };
   }
@@ -36,7 +38,7 @@ export async function initializeTransaction({ email, amount, reference, metadata
 
 // Confirm a transaction actually succeeded (called from the callback and as a webhook backstop).
 export async function verifyTransaction(reference) {
-  if (CONFIG.paystackDemo) {
+  if (CONFIG.paymentDemo) {
     return { success: true, reference, amount: null, demo: true };
   }
   const res = await fetch(`${PAYSTACK_API}/transaction/verify/${encodeURIComponent(reference)}`, {
@@ -54,7 +56,18 @@ export async function verifyTransaction(reference) {
 
 // Verify the x-paystack-signature header on incoming webhooks (HMAC SHA512 of the raw body).
 export function verifyWebhookSignature(rawBody, signature) {
+  if (CONFIG.paymentDemo) return true;
   if (!CONFIG.paystackSecret) return false;
   const hash = crypto.createHmac('sha512', CONFIG.paystackSecret).update(rawBody).digest('hex');
   return hash === signature;
+}
+
+// Normalise a webhook payload to { reference, isPaymentSuccess } (gateway-independent shape).
+export function parseWebhookEvent(rawBody) {
+  let event = {};
+  try { event = JSON.parse(rawBody || '{}'); } catch { /* ignore */ }
+  return {
+    reference: event?.data?.reference,
+    isPaymentSuccess: event?.event === 'charge.success',
+  };
 }

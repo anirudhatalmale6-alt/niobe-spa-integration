@@ -5,7 +5,7 @@ import { dirname, join, extname } from 'path';
 import { CONFIG } from './config.js';
 import { getConsolidatedStock } from './stock.js';
 import { getBooking, bookingDeposit, startDeposit, finalizeDeposit, listBookings } from './bookings.js';
-import { verifyWebhookSignature } from './paystack.js';
+import { verifyWebhookSignature, parseWebhookEvent, displayName as gatewayName } from './gateway.js';
 import { renderPayPage, renderCheckout, renderSuccess } from './views.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -32,7 +32,7 @@ const server = createServer(async (req, res) => {
     const p = url.pathname;
 
     // --- JSON API ---
-    if (req.method === 'GET' && p === '/api/health') return json(res, 200, { ok: true, demoMode: CONFIG.demoMode, paystackDemo: CONFIG.paystackDemo });
+    if (req.method === 'GET' && p === '/api/health') return json(res, 200, { ok: true, demoMode: CONFIG.demoMode, gateway: gatewayName, paymentDemo: CONFIG.paymentDemo });
     if (req.method === 'GET' && p === '/api/stock') return json(res, 200, await getConsolidatedStock());
     if (req.method === 'GET' && p === '/api/bookings') return json(res, 200, listBookings());
 
@@ -64,13 +64,15 @@ const server = createServer(async (req, res) => {
       return html(res, 200, renderSuccess(result));
     }
 
-    // --- Paystack webhook (live) ---
-    if (req.method === 'POST' && p === '/webhook/paystack') {
+    // --- Payment webhook (live) — gateway-independent ---
+    // /webhook/payment is the generic route; /webhook/paystack kept as a backward-compatible alias.
+    if (req.method === 'POST' && (p === '/webhook/payment' || p === '/webhook/paystack')) {
       const raw = await readBody(req);
       if (!verifyWebhookSignature(raw, req.headers['x-paystack-signature'])) return json(res, 401, { error: 'bad signature' });
-      const event = JSON.parse(raw || '{}');
-      if (event.event === 'charge.success') {
-        try { await finalizeDeposit(event.data.reference); } catch (e) { /* logged; respond 200 so Paystack stops retrying */ }
+      const event = parseWebhookEvent(raw);
+      if (event.isPaymentSuccess && event.reference) {
+        // finalizeDeposit re-verifies the payment via the gateway's status API before confirming.
+        try { await finalizeDeposit(event.reference); } catch (e) { /* logged; respond 200 so the gateway stops retrying */ }
       }
       return json(res, 200, { received: true });
     }
@@ -88,5 +90,5 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(CONFIG.port, () => {
-  console.log(`Niobe integration on http://localhost:${CONFIG.port}  (stock demo=${CONFIG.demoMode}, paystack demo=${CONFIG.paystackDemo})`);
+  console.log(`Niobe integration on http://localhost:${CONFIG.port}  (stock demo=${CONFIG.demoMode}, gateway=${gatewayName}, payment demo=${CONFIG.paymentDemo})`);
 });

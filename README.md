@@ -11,12 +11,14 @@ into one seamless experience.
    per-branch low/out-of-stock flags.
 2. **Unified booking availability** *(next)* — merged services / therapists / slots across all
    branches, filterable by service, therapist or date.
-3. **Deposit payments + auto-confirm** *(built — test mode)* — Paystack pay-link (cards, mobile
+3. **Deposit payments + auto-confirm** *(built — test mode)* — a hosted pay-link (cards, mobile
    money, bank transfer) for a minimum 50% deposit or full payment; on funds cleared the booking
    is auto-confirmed in SimpleSpa via the Appointment-Status write endpoint (status 20), stamped
    with the unique payment reference. Bookings covered by a gift card / account credit skip the
-   deposit. `PAYSTACK_DEMO=true` runs the whole flow against a local simulator so it can be proven
-   before live keys exist.
+   deposit. The gateway sits behind a thin adapter (`src/gateway.js`) — **Hubtel** (recommended for
+   Ghana: mobile money + cards) and **Paystack** are both supported and selected with a single
+   config value (`PAYMENT_GATEWAY`). `PAYMENT_DEMO=true` runs the whole flow against a local
+   simulator so it can be proven before live keys exist.
 
 ### Deposit flow endpoints
 
@@ -25,7 +27,7 @@ into one seamless experience.
 | `GET /pay?booking=<id>` | Customer-facing deposit page (choose 50% or full). |
 | `POST /pay/start` | Creates the Paystack transaction and redirects to the pay link. |
 | `GET /pay/callback` | Verifies payment, auto-confirms the SimpleSpa appointment, shows result. |
-| `POST /webhook/paystack` | Live webhook (HMAC-SHA512 signature verified) — auto-confirms on `charge.success`. |
+| `POST /webhook/payment` | Live gateway webhook — auto-confirms on a successful payment (re-verified via the gateway's status API). `/webhook/paystack` is kept as an alias. |
 | `GET /demo/checkout`, `POST /demo/pay` | Simulated Paystack checkout (demo mode only). |
 
 ## How the stock module works

@@ -1,5 +1,5 @@
 import { depositOptions, isAmountAllowed, makeReference } from './deposit.js';
-import { initializeTransaction, verifyTransaction } from './paystack.js';
+import { initializeTransaction, verifyTransaction } from './gateway.js';
 import { confirmAppointment } from './confirm.js';
 import { CONFIG } from './config.js';
 

@@ -1,5 +1,6 @@
 // Server-rendered customer-facing pages for the deposit flow.
 // Shared styling with the staff dashboard (warm cream + gold Niobe palette).
+import { displayName as GATEWAY } from './gateway.js';
 
 const GHS = (n) => `GHS ${Number(n).toLocaleString('en-GH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -34,7 +35,7 @@ const shell = (title, body) => `<!doctype html><html lang="en"><head>
     padding:2px 9px;border-radius:20px;margin-left:6px}
   .center{text-align:center}
   .demoTag{position:fixed;top:10px;right:12px;font-size:11px;color:#7a5c25;background:#fbf4e8;border:1px solid #ecdcbf;padding:3px 9px;border-radius:20px}
-</style></head><body>${title.includes('Test') || true ? '<div class="demoTag">Paystack Test Mode</div>' : ''}
+</style></head><body><div class="demoTag">${GATEWAY} Test Mode</div>
 <div class="wrap">${body}</div></body></html>`;
 
 export function renderPayPage(bd) {
@@ -64,13 +65,13 @@ export function renderPayPage(bd) {
         ${opts}
         <button class="btn" type="submit">Continue to secure payment</button>
       </form>
-      <div class="note">Payments are processed securely by Paystack — cards, mobile money and bank transfer.<br>A minimum of ${bd.options[0].amount ? Math.round((bd.options[0].amount / bd.price) * 100) : 50}% is required to hold your slot.</div>
+      <div class="note">Payments are processed securely by ${GATEWAY} — cards, mobile money and bank transfer.<br>A minimum of ${bd.options[0].amount ? Math.round((bd.options[0].amount / bd.price) * 100) : 50}% is required to hold your slot.</div>
     </div>`);
 }
 
 export function renderCheckout(pay, booking) {
-  return shell('Paystack Test Checkout', `
-    <div class="brand"><div class="n">Paystack <span class="badge">TEST</span></div><div class="t">Simulated secure checkout</div></div>
+  return shell(`${GATEWAY} Test Checkout`, `
+    <div class="brand"><div class="n">${GATEWAY} <span class="badge">TEST</span></div><div class="t">Simulated secure checkout</div></div>
     <div class="card">
       <div class="row"><span class="k">Pay to</span><span class="v">Niobe Beauty</span></div>
       <div class="row"><span class="k">Customer</span><span class="v">${booking.customer.email}</span></div>
@@ -80,7 +81,7 @@ export function renderCheckout(pay, booking) {
         <input type="hidden" name="reference" value="${pay.reference}">
         <button class="btn" type="submit">Pay ${GHS(pay.amount)} now</button>
       </form>
-      <div class="note">This is a simulated Paystack screen for testing. With live test keys it becomes the real Paystack checkout (Card / Mobile Money / Bank).</div>
+      <div class="note">This is a simulated ${GATEWAY} screen for testing. With live test keys it becomes the real ${GATEWAY} checkout (Card / Mobile Money / Bank).</div>
     </div>`);
 }
 

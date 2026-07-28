@@ -22,11 +22,23 @@ export const CONFIG = {
   port: Number(process.env.PORT || 3000),
   lowStockThreshold: Number(process.env.LOW_STOCK_THRESHOLD || 2),
 
-  // --- Payments (Paystack) ---
-  // paystackDemo = simulate the Paystack checkout locally (no live keys needed yet).
-  paystackDemo: bool(process.env.PAYSTACK_DEMO, true),
+  // --- Payments ---
+  // Active gateway: 'hubtel' (recommended for Ghana) or 'paystack'. The rest of the
+  // deposit/auto-confirm flow is gateway-independent — only the adapter changes.
+  gateway: (process.env.PAYMENT_GATEWAY || 'hubtel').toLowerCase(),
+  // paymentDemo = simulate the checkout locally (no live keys needed yet).
+  // Falls back to the old PAYSTACK_DEMO flag for backward compatibility.
+  paymentDemo: bool(process.env.PAYMENT_DEMO ?? process.env.PAYSTACK_DEMO, true),
+
+  // Paystack credentials
   paystackSecret: process.env.PAYSTACK_SECRET_KEY || '',
   paystackPublic: process.env.PAYSTACK_PUBLIC_KEY || '',
+
+  // Hubtel credentials (from the Hubtel dashboard -> API keys)
+  hubtelClientId: process.env.HUBTEL_CLIENT_ID || '',
+  hubtelClientSecret: process.env.HUBTEL_CLIENT_SECRET || '',
+  hubtelMerchantAccount: process.env.HUBTEL_MERCHANT_ACCOUNT || '',
+
   currency: process.env.CURRENCY || 'GHS',
   // Deposit rule: minimum 50% or pay in full (same across all services/branches).
   depositMinPercent: Number(process.env.DEPOSIT_MIN_PERCENT || 50),
