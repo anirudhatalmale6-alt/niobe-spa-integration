@@ -36,7 +36,8 @@ into one seamless experience.
 
 ## How the stock module works
 
-Each branch has its own SimpleSpa API credential (`KEY:SECRET`). The service fans out to every
+Each branch has its own SimpleSpa API key (`Authorization: Bearer <KEY>`; read/write is set by the
+key's Mode in the dashboard — there is no separate secret). The service fans out to every
 branch's `POST /api/v1/products.php` in parallel, merges the results by SKU (falling back to
 product name), and returns a single catalogue with per-branch quantities and a combined total.
 A failing branch is reported in the response but never blocks the others.
@@ -48,7 +49,7 @@ A failing branch is reported in the response but never blocks the others.
 ## Setup
 
 ```bash
-cp .env.example .env      # then fill in each branch's KEY and SECRET
+cp .env.example .env      # then fill in each branch's API KEY (Mode 3)
 npm start                 # or: node src/server.js
 ```
 
@@ -59,7 +60,7 @@ Open http://localhost:3000
 | Variable | Purpose |
 | --- | --- |
 | `DEMO_MODE` | `true` serves sample data in the real API format (for preview). Set `false` to pull live branch data. |
-| `<BRANCH>_KEY` / `<BRANCH>_SECRET` | Each branch's SimpleSpa API credential. |
+| `<BRANCH>_KEY` | Each branch's SimpleSpa API key (Mode 3 for auto-confirm + inventory writes). |
 | `LOW_STOCK_THRESHOLD` | Quantity at or below which a branch is flagged "low". |
 | `SIMPLESPA_BASE` | API base URL (default `https://my.simplespa.com/api/v1`). |
 

@@ -1,16 +1,18 @@
 import { CONFIG } from './config.js';
 
 // Thin client for the SimpleSpa Enterprise API.
-// All endpoints are POST with a JSON body and Bearer "<key>:<secret>" auth.
+// All endpoints are POST with a JSON body and Bearer "<key>" auth. A single API key
+// carries both identity and permission — read vs write is set by the key's Mode
+// (1 = Read, 2 = Write, 3 = Read + Write) in the SimpleSpa dashboard, not a secret.
 export async function ssPost(branch, endpoint, body = {}) {
-  if (!branch.key || !branch.secret) {
-    throw new Error(`Branch "${branch.name}" is missing its API key or secret`);
+  if (!branch.key) {
+    throw new Error(`Branch "${branch.name}" is missing its API key`);
   }
   const url = `${CONFIG.base}/${endpoint}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${branch.key}:${branch.secret}`,
+      'Authorization': `Bearer ${branch.key}`,
       'Content-Type': 'application/json',
       'Accept': 'application/json',
     },
