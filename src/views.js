@@ -75,6 +75,48 @@ export function renderPayPage(bd) {
     </div>`);
 }
 
+// Landing page from the email deposit link when the phone couldn't be pre-filled: ask for the
+// mobile number the customer booked with (same as SimpleSpa's own "manage booking" sign-in).
+export function renderPhoneEntry(branchId, branchName, note) {
+  return shell('Pay your deposit', `
+    <div class="brand"><div class="n">Niobe Beauty</div><div class="t">${branchName || 'Secure your appointment'}</div></div>
+    <div class="card">
+      <h2 style="margin-top:2px">Pay your deposit</h2>
+      <p style="color:var(--muted);font-size:14px;margin:0 0 14px">Enter the mobile number you used when booking to bring up your appointment. No country code (e.g. +233) and no leading zero.</p>
+      ${note ? `<div class="note" style="color:#b0492e;margin:0 0 12px">${note}</div>` : ''}
+      <form method="GET" action="/pay">
+        <input type="hidden" name="b" value="${branchId || ''}">
+        <input name="ph" inputmode="tel" placeholder="24 123 4567" required
+          style="width:100%;padding:13px 14px;border:1.5px solid var(--line);border-radius:12px;font-size:16px;margin-bottom:8px">
+        <button class="btn" type="submit">Find my appointment</button>
+      </form>
+    </div>`);
+}
+
+// When one phone matches more than one upcoming unpaid appointment, let them pick.
+export function renderChooser(list, branchName) {
+  const rows = list.map((b) => `
+    <a href="/pay?booking=${encodeURIComponent(b.id)}" style="text-decoration:none;color:inherit">
+      <div class="opt" style="cursor:pointer">
+        <span><span class="lab">${b.service}</span><br><span class="sub">${b.branchName} · ${b.datetime} · with ${b.therapist}</span></span>
+        <span class="amt">${GHS(b.price)}</span>
+      </div>
+    </a>`).join('');
+  return shell('Choose your appointment', `
+    <div class="brand"><div class="n">Niobe Beauty</div><div class="t">${branchName || 'Secure your appointment'}</div></div>
+    <div class="card"><h2 style="margin-top:2px">Which appointment?</h2>${rows}</div>`);
+}
+
+export function renderNoMatch(branchId, branchName) {
+  return shell('No appointment found', `
+    <div class="brand"><div class="n">Niobe Beauty</div><div class="t">${branchName || ''}</div></div>
+    <div class="card center">
+      <h2>We couldn't find an unpaid appointment</h2>
+      <p style="color:var(--muted);font-size:14px">Please double-check the mobile number you booked with, or contact us and we'll be glad to help.</p>
+      <a class="btnAlt" href="/pay?b=${branchId || ''}" style="margin-top:14px">Try another number</a>
+    </div>`);
+}
+
 export function renderCheckout(pay, booking) {
   const name = displayNameOf(pay.gateway);
   return shell(`${name} Test Checkout`, `

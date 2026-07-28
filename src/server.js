@@ -2,11 +2,11 @@ import { createServer } from 'http';
 import { readFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname, join, extname } from 'path';
-import { CONFIG } from './config.js';
+import { CONFIG, branchById } from './config.js';
 import { getConsolidatedStock } from './stock.js';
-import { getBooking, bookingDeposit, startDeposit, finalizeDeposit, listBookings, getPayment } from './bookings.js';
+import { getBooking, bookingDeposit, startDeposit, finalizeDeposit, listBookings, getPayment, lookupBookings } from './bookings.js';
 import { verifyWebhookSignature, parseWebhookEvent, displayName as gatewayName } from './gateway.js';
-import { renderPayPage, renderCheckout, renderSuccess } from './views.js';
+import { renderPayPage, renderCheckout, renderSuccess, renderPhoneEntry, renderChooser, renderNoMatch } from './views.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(__dirname, '..', 'public');
@@ -38,9 +38,22 @@ const server = createServer(async (req, res) => {
 
     // --- Deposit flow (customer-facing) ---
     if (req.method === 'GET' && p === '/pay') {
-      const bd = bookingDeposit(url.searchParams.get('booking'));
-      if (!bd) return html(res, 404, 'Booking not found');
-      return html(res, 200, renderPayPage(bd));
+      // Direct booking id (chooser links use this)
+      const bookingId = url.searchParams.get('booking');
+      if (bookingId) {
+        const bd = bookingDeposit(bookingId);
+        if (!bd) return html(res, 404, 'Booking not found');
+        return html(res, 200, renderPayPage(bd));
+      }
+      // Email deposit link: branch (b) + optional pre-filled phone (ph=[CLIENT_PHONE]).
+      const b = url.searchParams.get('b') || '';
+      const branchName = branchById(b)?.name;
+      const ph = url.searchParams.get('ph');
+      if (!ph) return html(res, 200, renderPhoneEntry(b, branchName));
+      const matches = lookupBookings({ branchId: b, phone: ph });
+      if (matches.length === 1) return html(res, 200, renderPayPage(bookingDeposit(matches[0].id)));
+      if (matches.length > 1) return html(res, 200, renderChooser(matches, branchName));
+      return html(res, 200, renderNoMatch(b, branchName));
     }
     if (req.method === 'POST' && p === '/pay/start') {
       const body = parseBody(await readBody(req), req.headers['content-type']);

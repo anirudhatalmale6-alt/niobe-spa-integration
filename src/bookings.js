@@ -25,6 +25,20 @@ seed();
 export function listBookings() { return [...bookings.values()]; }
 export function getBooking(id) { return bookings.get(id); }
 
+// Find a customer's upcoming unpaid bookings at a branch by the mobile number they booked with
+// (mirrors SimpleSpa's phone-number sign-in, since the email exposes no appointment-ID tag).
+// In demo this filters the seeded bookings; live it will query appointments.php for the branch
+// and filter client-side. Matches on the last 9 digits so country code / leading zero don't matter.
+const last9 = (s) => String(s || '').replace(/\D/g, '').slice(-9);
+export function lookupBookings({ branchId, phone }) {
+  const ph = last9(phone);
+  if (!ph) return [];
+  return [...bookings.values()].filter((b) =>
+    (!branchId || b.branchId === branchId) &&
+    b.status === 'pending' &&
+    last9(b.customer.phone) === ph);
+}
+
 // Build the deposit choices (50% or full) for a booking.
 export function bookingDeposit(id) {
   const b = getBooking(id);
