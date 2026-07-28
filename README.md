@@ -9,8 +9,10 @@ into one seamless experience.
 1. **Cross-branch product stock** *(this milestone)* — one consolidated view of live inventory
    across every branch, for both customers and branch staff. Search, category filter, and
    per-branch low/out-of-stock flags.
-2. **Unified booking availability** *(next)* — merged services / therapists / slots across all
-   branches, filterable by service, therapist or date.
+2. **Unified booking availability** *(built)* — merged open appointment slots across all branches
+   for a chosen service and date. SimpleSpa exposes no availability endpoint, so slots are
+   **computed** per branch from live staff working hours, service durations and existing
+   bookings, then merged into one view filterable by service, date and branch.
 3. **Deposit payments + auto-confirm** *(built — test mode)* — a hosted pay-link (cards, mobile
    money, bank transfer) for a minimum 50% deposit or full payment; on funds cleared the booking
    is auto-confirmed in SimpleSpa via the Appointment-Status write endpoint (status 20), stamped
@@ -33,6 +35,27 @@ into one seamless experience.
 | `GET /pay/callback` | Verifies payment, auto-confirms the SimpleSpa appointment, shows result. |
 | `POST /webhook/payment` | Live gateway webhook — auto-confirms on a successful payment (re-verified via the gateway's status API). `/webhook/paystack` is kept as an alias. |
 | `GET /demo/checkout`, `POST /demo/pay` | Simulated Paystack checkout (demo mode only). |
+
+### Availability endpoints
+
+| Route | Description |
+| --- | --- |
+| `GET /availability.html` | Staff/customer-facing unified availability page (service + date + branch). |
+| `GET /api/services` | Distinct service names across all branches (for the picker), each with duration + branch count. |
+| `GET /api/availability?service=<name>&date=<YYYY-MM-DD>[&branch=<id>]` | Computed open slots per branch for that service/date. |
+
+## How the availability module works
+
+There is no availability or free-slots endpoint in SimpleSpa, so the module computes it. Per branch
+it reads staff working hours (`staff.php`), the service duration (`services.php`) and existing
+bookings (`appointments.php`), then for each on-shift therapist walks their working windows on a
+configurable grid (`SLOT_GRANULARITY`, default 15 min) and keeps every start time where the service
+(plus its downtime) fits without overlapping a booking. A start time is offered for the branch if at
+least one therapist is free, and the response reports how many therapists are free at each time.
+Determined from Niobe's live data: staff `hours[].day` is `0 = Monday … 6 = Sunday`, and a booking
+blocks a therapist unless it is cancelled (status 15) or a no-show (17). SimpleSpa has no
+service→therapist capability map, so v1 treats every on-shift therapist as able to perform the
+service; that is the single place to refine if per-therapist skills are later tracked.
 
 ## How the stock module works
 

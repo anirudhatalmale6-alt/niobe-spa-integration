@@ -37,6 +37,57 @@ const FORCED = {
   'alisa_hotel:NIO-SCRUB': 1,
 };
 
+// --- Demo data for the unified availability feed (DEMO_MODE=true) ---------
+const DEMO_SERVICES = [
+  { name: 'Swedish Massage (60 min)', duration_minutes: 60, price: 400 },
+  { name: 'Deep Tissue Massage (60 min)', duration_minutes: 60, price: 450 },
+  { name: 'Classic Facial (45 min)', duration_minutes: 45, price: 300 },
+  { name: 'Manicure & Pedicure', duration_minutes: 75, price: 250 },
+];
+const DEMO_BRANCHES = [
+  { id: 'east_legon', name: 'East Legon' },
+  { id: 'cantonments', name: 'Cantonments' },
+  { id: 'african_regent', name: 'African Regent Hotel' },
+  { id: 'hfc_c18', name: 'HFC Community 18' },
+  { id: 'alisa_hotel', name: 'Alisa Hotel Tema' },
+];
+
+// Deterministic pseudo-open-slots so demo screenshots are stable.
+function demoSlots(branchId, date, duration) {
+  const base = seeded(branchId, date) % 3; // small per-branch offset
+  const times = ['09:00', '10:30', '12:00', '13:30', '15:00', '16:30'];
+  return times
+    .filter((_, i) => (seeded(branchId, date + i) % 4) !== 0) // punch a few holes
+    .slice(base, base + 5)
+    .map((time) => ({ time, staffCount: 1 + (seeded(branchId, time) % 3), staff: ['Ama', 'Efua', 'Yaa'].slice(0, 1 + (seeded(branchId, time) % 3)) }));
+}
+
+export function mockAvailabilityData({ serviceName, date, branchId, list } = {}) {
+  if (list) return DEMO_SERVICES.map((s) => ({ ...s, branches: DEMO_BRANCHES.length }));
+  const svc = DEMO_SERVICES.find((s) => s.name.toLowerCase() === String(serviceName || '').toLowerCase()) || DEMO_SERVICES[0];
+  const targets = branchId ? DEMO_BRANCHES.filter((b) => b.id === branchId) : DEMO_BRANCHES;
+  const branches = targets.map((b, i) => {
+    const offered = i !== DEMO_BRANCHES.length - 1; // last branch doesn't offer it, to show the "not offered" state
+    return {
+      id: b.id, name: b.name, ok: true, offered,
+      service: offered ? { name: svc.name, duration_minutes: svc.duration_minutes, price: svc.price } : undefined,
+      staffOnShift: offered ? 2 + (seeded(b.id, date) % 3) : 0,
+      slots: offered ? demoSlots(b.id, date, svc.duration_minutes) : [],
+    };
+  });
+  return {
+    generatedAt: new Date().toISOString(),
+    demoMode: true,
+    query: { serviceName: svc.name, date, branchId: branchId || null },
+    dayOfWeek: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][(new Date(date + 'T00:00:00Z').getUTCDay() + 6) % 7],
+    branches,
+    summary: {
+      branchesOffering: branches.filter((b) => b.offered).length,
+      totalOpenSlots: branches.reduce((s, b) => s + b.slots.length, 0),
+    },
+  };
+}
+
 export function mockBranchProducts(branch) {
   return CATALOGUE.map((item) => {
     const forcedKey = `${branch.id}:${item.sku}`;

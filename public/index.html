@@ -48,6 +48,9 @@
   .bs{font-size:12px;padding:3px 10px;border-radius:20px;border:1px solid var(--line);background:#fff;color:var(--ink)}
   .bs .d{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px}
   .bs.ok .d{background:var(--ok)} .bs.err .d{background:var(--out)}
+  .nav{margin-top:10px;display:flex;gap:8px}
+  .nav a{font-size:13px;color:#e7d7c1;text-decoration:none;padding:5px 12px;border-radius:20px;border:1px solid #55463c}
+  .nav a.active{background:var(--gold);color:#2b2320;border-color:var(--gold);font-weight:600}
   @media(max-width:720px){.tiles{grid-template-columns:repeat(2,1fr)}}
 </style>
 </head>
@@ -56,6 +59,10 @@
   <div class="wrap" style="padding:0">
     <div class="brand"><span class="dot"></span><h1>Niobe Beauty — Cross-Branch Stock</h1></div>
     <div class="sub" id="subline">Live product inventory across all branches</div>
+    <div class="nav">
+      <a href="/availability.html">Availability</a>
+      <a href="/index.html" class="active">Cross-Branch Stock</a>
+    </div>
     <div class="branchstat" id="branchstat"></div>
   </div>
 </header>

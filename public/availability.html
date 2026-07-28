@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Niobe Beauty — Unified Availability</title>
+<style>
+  :root{
+    --bg:#f6f1ec; --card:#fffdfb; --ink:#2b2320; --muted:#8b7d73;
+    --line:#e9ddd2; --gold:#b08a54; --gold-deep:#8a6a3c;
+    --ok:#3f7d5b; --low:#c98a2b; --out:#b5493f;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--ink)}
+  header{background:linear-gradient(120deg,#2b2320,#3a2f28);color:#f6efe6;padding:20px 26px}
+  .brand{display:flex;align-items:center;gap:12px}
+  .brand h1{margin:0;font-size:20px;font-weight:600;letter-spacing:.3px}
+  .brand .dot{width:10px;height:10px;border-radius:50%;background:var(--gold)}
+  .sub{color:#d8c7b3;font-size:13px;margin-top:2px}
+  .nav{margin-top:10px;display:flex;gap:8px}
+  .nav a{font-size:13px;color:#e7d7c1;text-decoration:none;padding:5px 12px;border-radius:20px;border:1px solid #55463c}
+  .nav a.active{background:var(--gold);color:#2b2320;border-color:var(--gold);font-weight:600}
+  .wrap{max-width:1180px;margin:0 auto;padding:20px}
+  .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:18px 0}
+  .tile{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .tile .n{font-size:26px;font-weight:700}
+  .tile .l{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-top:2px}
+  .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:14px}
+  .fld{display:flex;flex-direction:column;gap:4px}
+  .fld label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  select,input[type=date]{padding:9px 12px;border:1px solid var(--line);border-radius:9px;background:#fff;font-size:14px;color:var(--ink)}
+  select#svc{min-width:280px}
+  .banner{background:#fbf4e8;border:1px solid #ecdcbf;color:#7a5c25;padding:8px 12px;border-radius:9px;font-size:13px;margin-bottom:12px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
+  .bcard{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  .bhead{display:flex;justify-content:space-between;align-items:center;padding:13px 16px;background:#f3e9dd;border-bottom:1px solid var(--line)}
+  .bhead .bn{font-weight:600}
+  .bhead .meta{font-size:12px;color:var(--muted)}
+  .slots{padding:14px 16px;display:flex;flex-wrap:wrap;gap:8px}
+  .slot{font-size:13px;font-weight:600;color:var(--gold-deep);background:#f4ead9;border:1px solid #ecdcbf;padding:6px 11px;border-radius:9px;cursor:default}
+  .slot .c{font-size:11px;color:var(--muted);font-weight:500;margin-left:4px}
+  .empty{padding:16px;color:var(--muted);font-size:13px}
+  .empty.off{color:#a98b62}
+  .svcline{font-size:12px;color:var(--muted);padding:0 16px 12px}
+  footer{color:var(--muted);font-size:12px;text-align:center;padding:18px}
+  .bs .d{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;background:var(--ok)}
+  .bs.err .d{background:var(--out)}
+  @media(max-width:720px){.tiles{grid-template-columns:repeat(3,1fr)} select#svc{min-width:0}}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap" style="padding:0">
+    <div class="brand"><span class="dot"></span><h1>Niobe Beauty — Unified Availability</h1></div>
+    <div class="sub" id="subline">Open appointment slots across all branches, in one view</div>
+    <div class="nav">
+      <a href="/availability.html" class="active">Availability</a>
+      <a href="/index.html">Cross-Branch Stock</a>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div id="demoBanner" class="banner" style="display:none">
+    Preview mode — showing sample availability. Live branch slots switch on automatically against the SimpleSpa API.
+  </div>
+
+  <div class="controls">
+    <div class="fld">
+      <label for="svc">Service</label>
+      <select id="svc"><option value="">Loading services…</option></select>
+    </div>
+    <div class="fld">
+      <label for="date">Date</label>
+      <input type="date" id="date" />
+    </div>
+    <div class="fld">
+      <label for="branch">Branch</label>
+      <select id="branch">
+        <option value="">All branches</option>
+        <option value="east_legon">East Legon</option>
+        <option value="cantonments">Cantonments</option>
+        <option value="african_regent">African Regent Hotel</option>
+        <option value="hfc_c18">HFC Community 18</option>
+        <option value="alisa_hotel">Alisa Hotel Tema</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="tiles">
+    <div class="tile"><div class="n" id="t-day">–</div><div class="l">Selected day</div></div>
+    <div class="tile"><div class="n" id="t-branches">–</div><div class="l">Branches offering it</div></div>
+    <div class="tile"><div class="n" id="t-slots">–</div><div class="l">Open slots found</div></div>
+  </div>
+
+  <div class="grid" id="grid"></div>
+  <footer id="foot"></footer>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+
+function isoToday(offsetDays=0){
+  const d = new Date(); d.setDate(d.getDate()+offsetDays);
+  return d.toISOString().slice(0,10);
+}
+
+async function loadServices(){
+  const r = await fetch('/api/services'); const list = await r.json();
+  const sel = $('#svc');
+  sel.innerHTML = list.map(s=>`<option value="${encodeURIComponent(s.name)}">${s.name}${s.duration_minutes?` · ${s.duration_minutes}m`:''}${s.branches>1?` · ${s.branches} branches`:''}</option>`).join('')
+    || '<option value="">No services found</option>';
+}
+
+function slotCard(b){
+  if(!b.ok) return `<div class="bcard"><div class="bhead"><span class="bn"><span class="bs err"><span class="d"></span></span>${b.name}</span></div><div class="empty">Couldn’t load — ${b.error||'unavailable'}</div></div>`;
+  if(!b.offered) return `<div class="bcard"><div class="bhead"><span class="bn">${b.name}</span></div><div class="empty off">This service isn’t offered at this branch.</div></div>`;
+  const svc = b.service ? `<div class="svcline">${b.service.name} · ${b.service.duration_minutes} min · GHS ${b.service.price} · ${b.staffOnShift} therapist(s) on shift</div>` : '';
+  const body = b.slots.length
+    ? `<div class="slots">${b.slots.map(s=>`<span class="slot" title="${s.staffCount} therapist(s) free">${s.time}<span class="c">·${s.staffCount}</span></span>`).join('')}</div>`
+    : `<div class="empty">Fully booked on this date.</div>`;
+  return `<div class="bcard"><div class="bhead"><span class="bn">${b.name}</span><span class="meta">${b.slots.length} open</span></div>${svc}${body}</div>`;
+}
+
+async function load(){
+  const service = $('#svc').value; const date = $('#date').value; const branch = $('#branch').value;
+  if(!service || !date){ return; }
+  $('#grid').innerHTML = '<div class="empty">Loading availability…</div>';
+  const qs = new URLSearchParams({ service: decodeURIComponent(service), date });
+  if(branch) qs.set('branch', branch);
+  const r = await fetch('/api/availability?'+qs.toString()); const d = await r.json();
+  $('#demoBanner').style.display = d.demoMode ? 'block' : 'none';
+  $('#t-day').textContent = d.dayOfWeek || '–';
+  $('#t-branches').textContent = d.summary.branchesOffering;
+  $('#t-slots').textContent = d.summary.totalOpenSlots;
+  $('#grid').innerHTML = d.branches.map(slotCard).join('');
+  $('#foot').textContent = `Computed live from staff hours, service durations and existing bookings · generated ${new Date(d.generatedAt).toLocaleString()}`;
+}
+
+(async function init(){
+  await loadServices();
+  $('#date').value = isoToday(2);
+  ['#svc','#date','#branch'].forEach(s=>$(s).addEventListener('change', load));
+  load();
+})();
+</script>
+</body>
+</html>

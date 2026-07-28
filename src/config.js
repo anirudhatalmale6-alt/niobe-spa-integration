@@ -23,6 +23,8 @@ export const CONFIG = {
   base: process.env.SIMPLESPA_BASE || 'https://my.simplespa.com/api/v1',
   port: Number(process.env.PORT || 3000),
   lowStockThreshold: Number(process.env.LOW_STOCK_THRESHOLD || 2),
+  // Granularity (minutes) of the computed booking-availability grid.
+  slotGranularity: Number(process.env.SLOT_GRANULARITY || 15),
 
   // --- Payments ---
   // Primary gateway: 'hubtel' (recommended for Ghana), 'expresspay' or 'paystack'.

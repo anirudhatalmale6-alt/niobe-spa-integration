@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join, extname } from 'path';
 import { CONFIG, branchById } from './config.js';
 import { getConsolidatedStock } from './stock.js';
+import { getUnifiedAvailability, listServiceNames } from './availability.js';
 import { getBooking, bookingDeposit, startDeposit, finalizeDeposit, listBookings, getPayment, lookupBookings } from './bookings.js';
 import { verifyWebhookSignature, parseWebhookEvent, displayName as gatewayName } from './gateway.js';
 import { renderPayPage, renderCheckout, renderSuccess, renderPhoneEntry, renderChooser, renderNoMatch } from './views.js';
@@ -35,6 +36,17 @@ const server = createServer(async (req, res) => {
     if (req.method === 'GET' && p === '/api/health') return json(res, 200, { ok: true, demoMode: CONFIG.demoMode, gateway: gatewayName, paymentDemo: CONFIG.paymentDemo });
     if (req.method === 'GET' && p === '/api/stock') return json(res, 200, await getConsolidatedStock());
     if (req.method === 'GET' && p === '/api/bookings') return json(res, 200, listBookings());
+    if (req.method === 'GET' && p === '/api/services') return json(res, 200, await listServiceNames());
+    if (req.method === 'GET' && p === '/api/availability') {
+      const q = url.searchParams;
+      const data = await getUnifiedAvailability({
+        serviceName: q.get('service') || undefined,
+        serviceId: q.get('serviceId') || undefined,
+        date: q.get('date') || undefined,
+        branchId: q.get('branch') || undefined,
+      });
+      return json(res, 200, data);
+    }
 
     // --- Deposit flow (customer-facing) ---
     if (req.method === 'GET' && p === '/pay') {
