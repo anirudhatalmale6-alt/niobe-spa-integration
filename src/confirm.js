@@ -23,7 +23,7 @@ export async function confirmAppointment(branchId, appointmentId, paymentReferen
   }
 
   try {
-    const result = await ssPost(branch, 'write/appointment-status.php', {
+    const result = await ssPost(branch, 'write/appointments-status.php', {
       appointment_id: appointmentId,
       status: STATUS_CONFIRMED,
       reason: `deposit_ref:${paymentReference}`,
