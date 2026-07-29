@@ -23,6 +23,17 @@ function recordPaidDeposit(entry) {
   }
 }
 
+// Durable queue of customers who self-selected "paying with account credit" on the pay page.
+// These take NO deposit and are NEVER auto-confirmed — staff must verify the account actually
+// holds credit and then confirm the appointment manually. The log is the staff work-list.
+function recordCreditClaim(entry) {
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    appendFileSync(join(DATA_DIR, 'credit-claims.log'), JSON.stringify(entry) + '\n');
+  } catch { /* logging must never break the customer flow */ }
+  console.log(`[credit-claim] booking=${entry.bookingId} branch=${entry.branchId} appt=${entry.appointment_id} phone=${entry.phone} — needs staff verify + manual confirm`);
+}
+
 // A booking here is an existing SimpleSpa appointment that this service attaches a deposit
 // payment to. Live (DEMO_MODE=false) it is read from SimpleSpa's appointments.php by the
 // customer's branch + mobile number; in demo we seed a couple so the flow can be walked.
@@ -236,3 +247,20 @@ export async function finalizeDeposit(reference) {
 }
 
 export function getPayment(reference) { return payments.get(reference); }
+
+// Customer self-selects "I'm paying with account credit" on the pay page. We take NO deposit
+// and do NOT confirm the appointment — instead we flag it for staff, who verify the account
+// truly has credit before confirming it manually in SimpleSpa. This is the controlled gate
+// that lets a genuine credit-friend skip the deposit without letting anyone slip through.
+export async function claimAccountCredit(bookingId) {
+  const b = await getBooking(bookingId);
+  if (!b) return null;
+  b.status = 'credit_claim_pending';
+  b.creditClaim = { at: new Date().toISOString() };
+  recordCreditClaim({
+    bookingId: b.id, appointment_id: b.appointment_id, branchId: b.branchId, branchName: b.branchName,
+    customer: b.customer?.name, phone: b.customer?.phone, service: b.service, datetime: b.datetime,
+    price: b.price, at: b.creditClaim.at,
+  });
+  return b;
+}

@@ -5,9 +5,9 @@ import { dirname, join, extname } from 'path';
 import { CONFIG, branchById } from './config.js';
 import { getConsolidatedStock } from './stock.js';
 import { getUnifiedAvailability, listServiceNames } from './availability.js';
-import { getBooking, bookingDeposit, startDeposit, finalizeDeposit, listBookings, getPayment, lookupBookings } from './bookings.js';
+import { getBooking, bookingDeposit, startDeposit, finalizeDeposit, listBookings, getPayment, lookupBookings, claimAccountCredit } from './bookings.js';
 import { verifyWebhookSignature, parseWebhookEvent, displayName as gatewayName } from './gateway.js';
-import { renderPayPage, renderCheckout, renderSuccess, renderPhoneEntry, renderChooser, renderNoMatch } from './views.js';
+import { renderPayPage, renderCheckout, renderSuccess, renderPhoneEntry, renderChooser, renderNoMatch, renderCreditClaim } from './views.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(__dirname, '..', 'public');
@@ -71,6 +71,12 @@ const server = createServer(async (req, res) => {
       const body = parseBody(await readBody(req), req.headers['content-type']);
       const { authorization_url } = await startDeposit(body.bookingId, body.option, body.gateway);
       return redirect(res, authorization_url);
+    }
+    if (req.method === 'POST' && p === '/pay/credit-claim') {
+      const body = parseBody(await readBody(req), req.headers['content-type']);
+      const b = await claimAccountCredit(body.bookingId);
+      if (!b) return html(res, 404, 'Booking not found');
+      return html(res, 200, renderCreditClaim(b));
     }
     if (req.method === 'GET' && p === '/demo/checkout') {
       const pay = getPayment(url.searchParams.get('reference'));

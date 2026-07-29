@@ -80,7 +80,29 @@ export function renderPayPage(bd) {
         ${backup ? `<button class="btnAlt" type="submit" name="gateway" value="${backup}">Having trouble? Pay with ${displayNameOf(backup)} instead</button>` : ''}
         ${CONFIG.intlCurrency ? `<button class="btnAlt" type="submit" name="gateway" value="international">Paying from abroad? Pay in ${CONFIG.intlCurrency}</button>` : ''}
       </form>
+      <form method="POST" action="/pay/credit-claim" style="margin-top:2px">
+        <input type="hidden" name="bookingId" value="${b.id}">
+        <button class="btnAlt" type="submit">I'm paying with my Niobe account credit</button>
+      </form>
       <div class="note">Payments are processed securely by ${GATEWAY}${backup ? ` (or ${displayNameOf(backup)} as a backup)` : ''} — cards, mobile money and bank transfer.<br>A minimum of ${bd.options[0].amount ? Math.round((bd.options[0].amount / bd.price) * 100) : 50}% is required to hold your slot.${feeLine}</div>
+    </div>`);
+}
+
+// Shown after a customer clicks "I'm paying with account credit". No payment is taken and the
+// booking is NOT yet confirmed — it's flagged for staff to verify the credit and confirm.
+export function renderCreditClaim(booking) {
+  const b = booking || {};
+  return shell('Account credit — pending confirmation', `
+    <div class="brand"><div class="n">Niobe Beauty</div><div class="t">Account credit</div></div>
+    <div class="card center">
+      <div class="tick">✓</div>
+      <h2>No payment taken — we'll confirm shortly</h2>
+      <div style="text-align:left;margin-top:8px">
+        ${b.service ? `<div class="row"><span class="k">Service</span><span class="v">${b.service}</span></div>` : ''}
+        ${b.branchName ? `<div class="row"><span class="k">Branch</span><span class="v">${b.branchName}</span></div>` : ''}
+        ${b.datetime ? `<div class="row"><span class="k">Date &amp; time</span><span class="v">${b.datetime}</span></div>` : ''}
+      </div>
+      <div class="note">You've told us you're paying from your Niobe account credit, so no deposit has been charged. Our team will check your account balance and confirm this appointment for you. If there's any issue with the credit, we'll reach out to you directly.</div>
     </div>`);
 }
 
