@@ -50,9 +50,13 @@ const shell = (title, body, tag = CONFIG.paymentDemo ? `${GATEWAY} Test Mode` : 
 export function renderPayPage(bd) {
   const b = bd.booking;
   if (bd.exempt) {
+    const credit = bd.reason === 'account_credit';
+    const msg = credit
+      ? 'No deposit is needed here — this booking is paid from your Niobe account credit. Our team will confirm your appointment directly, so there\'s nothing more for you to do.'
+      : 'This booking is covered by a gift card or account credit, so your slot is already secured. See you soon!';
     return shell('Booking secured', `<div class="brand"><div class="n">Niobe Beauty</div><div class="t">Booking confirmation</div></div>
     <div class="card center"><div class="tick">✓</div><h2>No deposit needed</h2>
-    <p style="color:var(--muted);font-size:14px">This booking is covered by a gift card or account credit, so your slot is already secured. See you soon!</p></div>`);
+    <p style="color:var(--muted);font-size:14px">${msg}</p></div>`);
   }
   const opts = bd.options.map((o) => `
     <label class="opt">

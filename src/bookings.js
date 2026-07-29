@@ -4,6 +4,7 @@ import { confirmAppointment } from './confirm.js';
 import { convertFromGHS } from './fx.js';
 import { CONFIG, branchById } from './config.js';
 import { ssPost } from './simplespa.js';
+import { isCreditClient } from './credit.js';
 import { appendFileSync, mkdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -47,7 +48,10 @@ function seed() {
       service: 'Classic Facial (45 min)', price: 90, therapist: 'Efua', datetime: '2026-08-03 14:30',
       customer: { name: 'Kwabena Osei', email: 'kwabena@example.com', phone: '233209876543' } },
   ];
-  for (const s of samples) bookings.set(s.id, { ...s, status: 'pending', giftCardOrCredit: false });
+  for (const s of samples) {
+    const creditExempt = isCreditClient(s.customer.phone);
+    bookings.set(s.id, { ...s, status: 'pending', creditExempt, giftCardOrCredit: creditExempt });
+  }
 }
 if (CONFIG.demoMode) seed();
 
@@ -90,6 +94,11 @@ async function toBooking(branch, appt) {
   const prices = await servicePriceMap(branch);
   const svc = prices.get(String(appt.service?.service_id));
   const name = `${appt.client?.first_name || ''} ${appt.client?.last_name || ''}`.trim() || 'Guest';
+  const phone = appt.client?.mobile || '';
+  // SimpleSpa's appointment/client API exposes no credit or gift-card flag, so we rely on a
+  // staff-controlled allow-list (see credit.js): listed numbers pay from account credit and
+  // are NOT asked for a deposit — their booking is confirmed manually by staff.
+  const creditExempt = isCreditClient(phone);
   const b = {
     id: makeBookingId(branch.id, appt.appointment_id),
     appointment_id: appt.appointment_id,
@@ -99,13 +108,13 @@ async function toBooking(branch, appt) {
     price: svc ? svc.price : 0,
     therapist: appt.staff?.staff_name || '',
     datetime: appt.start,
-    customer: { name, email: appt.client?.email || '', phone: appt.client?.mobile || '' },
+    customer: { name, email: appt.client?.email || '', phone },
     status: 'pending',
     requireFull: serviceRequiresFull(appt.service?.service_name || svc?.name),
-    // SimpleSpa's API exposes no gift-card/credit flag on an appointment, so a deposit is
-    // requested for all bookings sent the pay link. (Branches simply don't send gift-card
-    // customers the link.) Can be refined if such a flag becomes available.
-    giftCardOrCredit: false,
+    creditExempt,
+    // giftCardOrCredit drives the "no deposit" path in depositOptions; for credit clients it
+    // is set from the allow-list above.
+    giftCardOrCredit: creditExempt,
   };
   bookings.set(b.id, b);
   return b;
@@ -154,7 +163,11 @@ export async function lookupBookings({ branchId, phone }) {
 export async function bookingDeposit(id) {
   const b = await getBooking(id);
   if (!b) return null;
-  return { booking: b, ...depositOptions(b.price, { giftCardOrCredit: b.giftCardOrCredit, requireFull: b.requireFull }) };
+  const d = depositOptions(b.price, { giftCardOrCredit: b.giftCardOrCredit, requireFull: b.requireFull });
+  // Distinguish an account-credit exemption (staff confirms manually) from a plain one, so
+  // the customer page can show the right wording.
+  if (d.exempt && b.creditExempt) d.reason = 'account_credit';
+  return { booking: b, ...d };
 }
 
 // Start a payment: validate the chosen amount, create a unique reference, and get the pay link.
