@@ -9,7 +9,7 @@ import { getBooking, bookingDeposit, startDeposit, finalizeDeposit, listBookings
 import { startPurchase, finalizePurchase, getPurchase } from './giftcards.js';
 import { getCatalog } from './giftup.js';
 import { verifyWebhookSignature, parseWebhookEvent, displayName as gatewayName } from './gateway.js';
-import { renderPayPage, renderCheckout, renderSuccess, renderPhoneEntry, renderChooser, renderNoMatch, renderCreditClaim, renderGiftCardPage, renderGiftCheckout, renderGiftCardSuccess } from './views.js';
+import { renderPayPage, renderCheckout, renderSuccess, renderPhoneEntry, renderChooser, renderNoMatch, renderCreditClaim, renderGiftCardPage, renderGiftCheckout, renderGiftCardSuccess, renderGiftCardPending } from './views.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(__dirname, '..', 'public');
@@ -112,9 +112,14 @@ const server = createServer(async (req, res) => {
       }
     }
     if (req.method === 'GET' && p === '/gift-card/callback') {
-      const result = await finalizePurchase(url.searchParams.get('reference'));
-      if (!result.ok) return html(res, 402, 'Payment was not completed. Please try again.');
-      return html(res, 200, renderGiftCardSuccess(result));
+      // Try to finalise on the browser return, but mobile-money can settle a few seconds later,
+      // so if it's not confirmed yet we show a friendly "confirming" page — the Hubtel webhook
+      // (server-to-server) issues the card the moment payment clears, so no purchase is lost.
+      let result;
+      try { result = await finalizePurchase(url.searchParams.get('reference')); }
+      catch { result = { ok: false }; }
+      if (result.ok) return html(res, 200, renderGiftCardSuccess(result));
+      return html(res, 200, renderGiftCardPending());
     }
     if (req.method === 'GET' && p === '/pay/callback') {
       const result = await finalizeDeposit(url.searchParams.get('reference'));
@@ -127,13 +132,19 @@ const server = createServer(async (req, res) => {
     if (req.method === 'POST' && (p === '/webhook/payment' || p === '/webhook/paystack')) {
       const raw = await readBody(req);
       const event = parseWebhookEvent(raw);
-      // The stored payment record is the authority on which gateway processed this reference.
-      const pay = event.reference ? getPayment(event.reference) : null;
-      const gw = pay?.gateway || event.gateway;
+      const ref = event.reference;
+      // Same webhook serves booking deposits AND gift-card sales — route by which one owns the ref.
+      const purchase = ref ? getPurchase(ref) : null;
+      const pay = ref ? getPayment(ref) : null;
+      const gw = purchase?.gateway || pay?.gateway || event.gateway;
       if (!verifyWebhookSignature(gw, raw, req.headers['x-paystack-signature'])) return json(res, 401, { error: 'bad signature' });
-      if (event.isPaymentSuccess && event.reference) {
-        // finalizeDeposit re-verifies the payment via the gateway's status API before confirming.
-        try { await finalizeDeposit(event.reference); } catch (e) { /* logged; respond 200 so the gateway stops retrying */ }
+      console.log(`[webhook] ref=${ref} success=${event.isPaymentSuccess} kind=${purchase ? 'giftcard' : pay ? 'deposit' : 'unknown'}`);
+      if (event.isPaymentSuccess && ref) {
+        // finalize* re-verifies the payment via the gateway's status API before acting.
+        try {
+          if (purchase) await finalizePurchase(ref);   // issue the gift card
+          else await finalizeDeposit(ref);             // confirm the booking
+        } catch (e) { console.log(`[webhook] finalize error ref=${ref}: ${e.message}`); }
       }
       return json(res, 200, { received: true });
     }

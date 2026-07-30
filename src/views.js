@@ -324,6 +324,18 @@ export function renderGiftCheckout(pur) {
     </div>`, `${name} Test Mode`);
 }
 
+// Shown if the browser returns before mobile-money payment has finished settling. The webhook
+// issues the card the moment it clears, so this is reassurance, not an error.
+export function renderGiftCardPending() {
+  return shell('Payment confirming', `
+    <div class="brand"><div class="n">Niobe Beauty</div><div class="t">Gift card</div></div>
+    <div class="card center">
+      <div class="tick">✓</div>
+      <h2>Thank you — we're confirming your payment</h2>
+      <div class="note">Your payment is being confirmed and your gift card voucher will be emailed to you within a few minutes. If it hasn't arrived shortly, just contact us with your payment details and we'll sort it out right away.</div>
+    </div>`);
+}
+
 export function renderGiftCardSuccess(result) {
   const pur = result.purchase || {};
   const card = (result.cards && result.cards[0]) || (pur.cards && pur.cards[0]) || null;

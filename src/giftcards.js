@@ -116,11 +116,16 @@ export async function startPurchase(input, preferredGateway) {
 export async function finalizePurchase(reference) {
   const pur = purchases.get(reference);
   if (!pur) throw new Error('Unknown gift-card reference');
+  // The browser return and the Hubtel webhook can both land — never issue twice.
   if (pur.status === 'issued') return { ok: true, purchase: pur, cards: pur.cards, alreadyIssued: true };
+  if (pur.status === 'issuing') return { ok: true, purchase: pur, cards: pur.cards || [], inProgress: true };
 
   const v = await verifyTransaction(reference, pur.gateway);
-  if (!v.success) { pur.status = 'failed'; return { ok: false, reason: 'payment_not_successful' }; }
-  pur.status = 'paid';
+  // Not confirmed yet (e.g. mobile money still settling) — leave it retryable; the webhook or a
+  // later browser refresh will finalise it once the payment clears.
+  if (!v.success) { if (pur.status !== 'issued') pur.status = 'pending'; return { ok: false, reason: 'payment_not_confirmed_yet' }; }
+  if (pur.status === 'issuing' || pur.status === 'issued') return { ok: true, purchase: pur, cards: pur.cards || [], inProgress: true };
+  pur.status = 'issuing';
 
   // Payment is authoritative. Issue the card; if GiftUp can't issue right now, we still record the
   // paid sale (never lose the money) and flag it for manual issue rather than failing the customer.
