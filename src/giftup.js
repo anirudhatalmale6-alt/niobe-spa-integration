@@ -83,6 +83,58 @@ export async function redeem(code, amount, { reason, reference, locationId, meta
   };
 }
 
+// Issue a NEW gift card by creating a GiftUp order. Payment has already been collected by us
+// (Stripe for abroad, Hubtel for local), so this just records the sale and lets GiftUp generate
+// the code + email the branded voucher (unless sendEmails=false, e.g. while testing). value/price
+// are in the card's currency (GHS — the GiftUp store currency). Returns { orderId, orderNumber,
+// cards:[{code,value}], downloadLinks }. `reference` is stamped as externalPaymentId for reconciliation.
+export async function issueOrder({
+  value, price, purchaserName, purchaserEmail, recipient, reference,
+  sku, itemName, sendEmails = true, scheduledFor,
+} = {}) {
+  if (!CONFIG.giftupKey) throw new Error('GiftUp API key not configured');
+  const v = Math.round(Number(value) * 100) / 100;
+  if (!(v > 0)) throw new Error('Invalid gift card value');
+  const cost = price != null ? Number(price) : v;
+
+  const body = {
+    orderDate: new Date().toISOString(),
+    disableAllEmails: !sendEmails,
+    purchaserName: purchaserName || recipient?.name || 'Niobe customer',
+    purchaserEmail: purchaserEmail || recipient?.email || undefined,
+    revenue: cost,
+    itemDetails: [{
+      quantity: 1,
+      name: itemName || 'Niobe Beauty Gift Card',
+      backingType: 'Currency',
+      price: cost,
+      value: v,
+      sku: sku || `NIOBE-GC-${v}`,
+    }],
+    recipientDetails: {
+      recipientName: recipient?.name || purchaserName || 'Niobe customer',
+      recipientEmail: recipient?.email || purchaserEmail,
+      message: recipient?.message || '',
+      scheduledFor: scheduledFor || null,
+      fulfilmentMethod: 'Email',
+    },
+    metadata: reference ? { externalPaymentId: reference } : {},
+  };
+
+  const res = await fetch(`${GIFTUP_API}/orders`, {
+    method: 'POST',
+    headers: headers({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(body),
+  });
+  const r = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(r?.message || `GiftUp order create failed (${res.status})`);
+
+  const cards = Array.isArray(r.giftCards)
+    ? r.giftCards.map((g) => ({ code: g.code, value: g.initialValue != null ? Number(g.initialValue) : v }))
+    : [];
+  return { orderId: r.orderId || r.id, orderNumber: r.orderNumber, cards, downloadLinks: r.downloadLinks || [], raw: r };
+}
+
 // Reverse a redemption (e.g. the booking was cancelled) using the transactionId from redeem().
 export async function undoRedemption(code, transactionId, { reason, metadata } = {}) {
   if (!CONFIG.giftupKey) throw new Error('GiftUp API key not configured');
