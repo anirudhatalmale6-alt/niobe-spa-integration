@@ -7,6 +7,7 @@ import { getConsolidatedStock } from './stock.js';
 import { getUnifiedAvailability, listServiceNames } from './availability.js';
 import { getBooking, bookingDeposit, startDeposit, finalizeDeposit, listBookings, getPayment, lookupBookings, claimAccountCredit } from './bookings.js';
 import { startPurchase, finalizePurchase, getPurchase } from './giftcards.js';
+import { getCatalog } from './giftup.js';
 import { verifyWebhookSignature, parseWebhookEvent, displayName as gatewayName } from './gateway.js';
 import { renderPayPage, renderCheckout, renderSuccess, renderPhoneEntry, renderChooser, renderNoMatch, renderCreditClaim, renderGiftCardPage, renderGiftCheckout, renderGiftCardSuccess } from './views.js';
 
@@ -98,7 +99,7 @@ const server = createServer(async (req, res) => {
 
     // --- Online gift-card purchase ---
     if (req.method === 'GET' && p === '/gift-card') {
-      return html(res, 200, renderGiftCardPage());
+      return html(res, 200, renderGiftCardPage(await getCatalog()));
     }
     if (req.method === 'POST' && p === '/gift-card/start') {
       const body = parseBody(await readBody(req), req.headers['content-type']);
@@ -107,7 +108,7 @@ const server = createServer(async (req, res) => {
         return redirect(res, authorization_url);
       } catch (e) {
         // Show the buyer a friendly message on the form rather than a raw error.
-        return html(res, 400, renderGiftCardPage(e.message || 'Something went wrong — please check your details and try again.'));
+        return html(res, 400, renderGiftCardPage(await getCatalog(), e.message || 'Something went wrong — please check your details and try again.'));
       }
     }
     if (req.method === 'GET' && p === '/gift-card/callback') {

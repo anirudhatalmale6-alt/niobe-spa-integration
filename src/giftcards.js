@@ -1,6 +1,6 @@
 import { initializeTransaction, verifyTransaction } from './gateway.js';
 import { convertFromGHS } from './fx.js';
-import { issueOrder } from './giftup.js';
+import { issueOrder, getCatalog, findItem } from './giftup.js';
 import { CONFIG } from './config.js';
 import { appendFileSync, mkdirSync } from 'fs';
 import { fileURLToPath } from 'url';
@@ -33,23 +33,13 @@ function makeGiftRef() {
 
 const isEmail = (s) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(s || '').trim());
 
-// Validate + normalise the buyer's input. Throws a customer-friendly message on bad input.
-function normalisePurchase({ amount, buyerName, buyerEmail, asGift, recipientName, recipientEmail, message, deliveryDate }) {
-  const amt = Math.round(Number(amount) * 100) / 100;
-  if (!(amt >= CONFIG.giftCardMinAmount)) {
-    throw new Error(`The minimum gift card amount is GHS ${CONFIG.giftCardMinAmount}.`);
-  }
-  if (amt > CONFIG.giftCardMaxAmount) {
-    throw new Error(`The maximum gift card amount is GHS ${CONFIG.giftCardMaxAmount}. For larger amounts please contact us.`);
-  }
+// Buyer + gift-recipient details, validated. Throws a customer-friendly message on bad input.
+function normaliseBuyer({ buyerName, buyerEmail, asGift, recipientName, recipientEmail, message, deliveryDate }) {
   if (!isEmail(buyerEmail)) throw new Error('Please enter a valid email address for the receipt.');
-
   const gift = !!asGift && String(asGift) !== 'false';
   // If it's a gift, we need the recipient's email to deliver the voucher; otherwise it goes to the buyer.
   if (gift && !isEmail(recipientEmail)) throw new Error('Please enter a valid email address for the person receiving the gift.');
-
   return {
-    amount: amt,
     buyerName: String(buyerName || '').trim() || 'Niobe customer',
     buyerEmail: String(buyerEmail).trim(),
     gift,
@@ -65,10 +55,30 @@ function normalisePurchase({ amount, buyerName, buyerEmail, asGift, recipientNam
   };
 }
 
+// Resolve WHAT is being bought: a chosen package (fixed value, taken from GiftUp so it can't be
+// tampered with) or a custom amount (validated against the min/max). Returns { value, itemId, packageName }.
+async function resolveSelection({ itemId, amount }) {
+  if (itemId) {
+    const catalog = await getCatalog();
+    const item = findItem(catalog, itemId);
+    if (!item) throw new Error('That package is no longer available — please choose another.');
+    if (!(Number(item.value) > 0)) throw new Error('That package has no price set — please choose another or a custom amount.');
+    return { value: Math.round(Number(item.value) * 100) / 100, itemId: item.id, packageName: item.name };
+  }
+  const amt = Math.round(Number(amount) * 100) / 100;
+  if (!(amt >= CONFIG.giftCardMinAmount)) throw new Error(`The minimum gift card amount is GHS ${CONFIG.giftCardMinAmount}.`);
+  if (amt > CONFIG.giftCardMaxAmount) throw new Error(`The maximum gift card amount is GHS ${CONFIG.giftCardMaxAmount}. For larger amounts please contact us.`);
+  // Use the "custom amount" item so a free-amount card inherits that item's design/terms.
+  const catalog = await getCatalog();
+  return { value: amt, itemId: catalog.customItemId || null, packageName: null };
+}
+
 // Start a gift-card purchase: price it (GHS, or the foreign-currency charge for the abroad rail),
 // kick off the payment, and stash the record so finalize can issue the card after payment.
 export async function startPurchase(input, preferredGateway) {
-  const p = normalisePurchase(input);
+  const buyer = normaliseBuyer(input);
+  const sel = await resolveSelection(input);
+  const p = { ...buyer, amount: sel.value, itemId: sel.itemId, packageName: sel.packageName };
   const reference = makeGiftRef();
 
   // The card VALUE is always GHS; abroad buyers are simply CHARGED the GBP equivalent (+ markup).
@@ -110,6 +120,8 @@ export async function finalizePurchase(reference) {
     const order = await issueOrder({
       value: pur.amount,
       price: pur.amount,                         // card is GHS-valued regardless of how they paid
+      itemId: pur.itemId,                        // chosen package (inherits its design) or custom-amount item
+      itemName: pur.packageName || undefined,
       purchaserName: pur.buyerName,
       purchaserEmail: pur.buyerEmail,
       recipient: pur.recipient,

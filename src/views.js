@@ -179,7 +179,7 @@ export function renderCheckout(pay, booking) {
 
 // --- Online gift-card purchase ---
 
-export function renderGiftCardPage(note) {
+export function renderGiftCardPage(catalog, note) {
   const min = CONFIG.giftCardMinAmount;
   const presets = [200, 500, 1000].filter((v) => v >= min);
   const chips = [min, ...presets].map((v) =>
@@ -187,6 +187,38 @@ export function renderGiftCardPage(note) {
   const intlBtn = CONFIG.intlCurrency
     ? `<button class="btnAlt" type="submit" name="gateway" value="international">Paying from abroad? Pay in ${CONFIG.intlCurrency}</button>`
     : '';
+
+  // Build the package picker: GiftUp items grouped by category, custom-amount item excluded.
+  const groups = catalog?.groups || [];
+  const items = (catalog?.items || []).filter((i) => i.id !== catalog?.customItemId && Number(i.value) > 0);
+  const optgroups = groups.map((g) => {
+    const rows = items.filter((i) => i.groupId === g.id)
+      .map((i) => `<option value="${i.id}">${i.name} — ${GHS(i.value)}</option>`).join('');
+    return rows ? `<optgroup label="${g.name}">${rows}</optgroup>` : '';
+  }).join('');
+  // Any items whose group we didn't get a name for still get listed.
+  const grouped = new Set(groups.map((g) => g.id));
+  const orphans = items.filter((i) => !grouped.has(i.groupId))
+    .map((i) => `<option value="${i.id}">${i.name} — ${GHS(i.value)}</option>`).join('');
+  const hasPackages = !!(optgroups || orphans);
+  const packageDefault = hasPackages; // default to the package picker when packages exist
+
+  const packageSection = hasPackages ? `
+        <div id="secPkg" style="${packageDefault ? '' : 'display:none'}">
+          <label class="lab" style="font-size:13px;color:var(--muted)">Choose a treatment or package</label>
+          <select name="itemId" id="pkg" ${packageDefault ? '' : 'disabled'}
+            style="width:100%;padding:13px 14px;border:1.5px solid var(--line);border-radius:12px;font-size:15px;margin:6px 0 4px;background:#fff">
+            <option value="" disabled selected>Select a treatment or package…</option>
+            ${optgroups}${orphans ? `<optgroup label="More">${orphans}</optgroup>` : ''}
+          </select>
+        </div>` : '';
+
+  const modeToggle = hasPackages ? `
+        <div style="display:flex;gap:8px;margin:2px 0 12px">
+          <label class="segbtn"><input type="radio" name="mode" value="package" ${packageDefault ? 'checked' : ''}> Packages</label>
+          <label class="segbtn"><input type="radio" name="mode" value="custom" ${packageDefault ? '' : 'checked'}> Custom amount</label>
+        </div>` : '';
+
   return shell('Buy a Niobe Beauty gift card', `
     <div class="brand"><div class="n">Niobe Beauty</div><div class="t">Gift cards</div></div>
     <div class="card">
@@ -194,10 +226,14 @@ export function renderGiftCardPage(note) {
       <p style="color:var(--muted);font-size:14px;margin:0 0 14px">Redeemable at any Niobe branch, valid for ${CONFIG.giftCardValidityDays} days. The voucher is emailed as soon as payment clears.</p>
       ${note ? `<div class="note" style="color:#b0492e;margin:0 0 12px">${note}</div>` : ''}
       <form method="POST" action="/gift-card/start" id="gcform">
-        <label class="lab" style="font-size:13px;color:var(--muted)">Amount (GHS)</label>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 10px">${chips}</div>
-        <input name="amount" id="amt" type="number" min="${min}" step="1" inputmode="numeric" placeholder="Enter an amount (min GHS ${min})" required
-          style="width:100%;padding:13px 14px;border:1.5px solid var(--line);border-radius:12px;font-size:16px">
+        ${modeToggle}
+        ${packageSection}
+        <div id="secCustom" style="${packageDefault ? 'display:none' : ''}">
+          <label class="lab" style="font-size:13px;color:var(--muted)">Amount (GHS)</label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 10px">${chips}</div>
+          <input name="amount" id="amt" type="number" min="${min}" step="1" inputmode="numeric" placeholder="Enter an amount (min GHS ${min})" ${packageDefault ? 'disabled' : ''}
+            style="width:100%;padding:13px 14px;border:1.5px solid var(--line);border-radius:12px;font-size:16px">
+        </div>
 
         <label class="opt" style="cursor:pointer;margin-top:14px">
           <span><span class="lab">Send it as a gift to someone else</span><br>
@@ -232,11 +268,24 @@ export function renderGiftCardPage(note) {
     </div>
     <script>
       var f=document.getElementById('gcform'),amt=document.getElementById('amt');
-      f.querySelectorAll('.chip').forEach(function(c){c.addEventListener('click',function(){amt.value=c.getAttribute('data-amt');
-        f.querySelectorAll('.chip').forEach(function(x){x.style.borderColor='var(--line)'});c.style.borderColor='var(--gold)';});});
+      if(amt){f.querySelectorAll('.chip').forEach(function(c){c.addEventListener('click',function(){amt.value=c.getAttribute('data-amt');
+        f.querySelectorAll('.chip').forEach(function(x){x.style.borderColor='var(--line)'});c.style.borderColor='var(--gold)';});});}
       document.getElementById('asGift').addEventListener('change',function(e){document.getElementById('recip').style.display=e.target.checked?'block':'none';});
+      // Package vs custom-amount toggle: show one section and disable the other's inputs so only
+      // the active field is submitted.
+      var secP=document.getElementById('secPkg'),secC=document.getElementById('secCustom'),pkg=document.getElementById('pkg');
+      function setMode(m){
+        var pkgMode=(m==='package');
+        if(secP)secP.style.display=pkgMode?'block':'none';
+        if(secC)secC.style.display=pkgMode?'none':'block';
+        if(pkg)pkg.disabled=!pkgMode;
+        if(amt)amt.disabled=pkgMode;
+      }
+      f.querySelectorAll('input[name=mode]').forEach(function(r){r.addEventListener('change',function(){if(r.checked)setMode(r.value);});});
     </script>
-    <style>.chip{border:1.5px solid var(--line);background:#fff;border-radius:20px;padding:8px 14px;font-size:14px;font-weight:600;color:var(--gold-deep);cursor:pointer}.chip:hover{border-color:var(--gold)}</style>`);
+    <style>.chip{border:1.5px solid var(--line);background:#fff;border-radius:20px;padding:8px 14px;font-size:14px;font-weight:600;color:var(--gold-deep);cursor:pointer}.chip:hover{border-color:var(--gold)}
+      .segbtn{flex:1;text-align:center;border:1.5px solid var(--line);border-radius:12px;padding:10px;font-size:14px;font-weight:600;color:var(--gold-deep);cursor:pointer;background:#fff}
+      .segbtn:has(input:checked){border-color:var(--gold);background:#f7efe3}.segbtn input{display:none}</style>`);
 }
 
 // Demo (test-mode) checkout for a gift-card purchase — mirrors renderCheckout but for a sale.
@@ -257,6 +306,7 @@ export function renderGiftCheckout(pur) {
     <div class="card">
       <div class="row"><span class="k">Pay to</span><span class="v">Niobe Beauty</span></div>
       <div class="row"><span class="k">Buyer</span><span class="v">${pur.buyerEmail}</span></div>
+      ${pur.packageName ? `<div class="row"><span class="k">Treatment</span><span class="v">${pur.packageName}</span></div>` : ''}
       ${pur.gift ? `<div class="row"><span class="k">Gift for</span><span class="v">${pur.recipient.name}</span></div>` : ''}
       ${amountRows}
       <div class="row"><span class="k">Reference</span><span class="v" style="font-family:ui-monospace,monospace;font-size:12px">${pur.reference}</span></div>
@@ -289,6 +339,7 @@ export function renderGiftCardSuccess(result) {
       <h2>Your gift card is on its way</h2>
       ${card ? `<div class="ref">Code: ${card.code}</div>` : ''}
       <div style="text-align:left;margin-top:8px">
+        ${pur.packageName ? `<div class="row"><span class="k">Treatment</span><span class="v">${pur.packageName}</span></div>` : ''}
         <div class="row"><span class="k">Value</span><span class="v">${GHS(pur.amount)}</span></div>
         ${card ? `<div class="row"><span class="k">Card code</span><span class="v" style="font-family:ui-monospace,monospace">${card.code}</span></div>` : ''}
         <div class="row"><span class="k">Valid for</span><span class="v">${CONFIG.giftCardValidityDays} days</span></div>

@@ -83,13 +83,39 @@ export async function redeem(code, amount, { reason, reference, locationId, meta
   };
 }
 
+// Catalog for the buy-a-gift-card page: the pre-configured packages (GiftUp "items") grouped
+// by category. Cached briefly so we don't hit GiftUp on every page load. Returns
+// { groups:[{id,name}], items:[{id,name,value,price,groupId}], customItemId }. customItemId is
+// the "custom amount" item (no fixed value) — used so free-amount cards inherit its design/terms.
+let catalogCache = { at: 0, data: null };
+const CATALOG_TTL_MS = 10 * 60 * 1000;
+export async function getCatalog() {
+  if (!CONFIG.giftupKey) return { groups: [], items: [], customItemId: null };
+  if (catalogCache.data && Date.now() - catalogCache.at < CATALOG_TTL_MS) return catalogCache.data;
+  const h = headers();
+  const [gi, it] = await Promise.all([
+    fetch(`${GIFTUP_API}/groups`, { headers: h }).then((r) => r.json()).catch(() => []),
+    fetch(`${GIFTUP_API}/items`, { headers: h }).then((r) => r.json()).catch(() => ({})),
+  ]);
+  const groups = (Array.isArray(gi) ? gi : gi.groups || []).map((g) => ({ id: g.id, name: g.name }));
+  const rawItems = Array.isArray(it) ? it : it.items || [];
+  const items = rawItems
+    .filter((i) => i.backingType === 'Currency' && i.isActive !== false)
+    .map((i) => ({ id: i.id, name: i.name, value: i.value, price: i.price, groupId: i.groupId }));
+  const custom = items.find((i) => i.value == null && i.price == null) || items.find((i) => /custom amount/i.test(i.name));
+  const data = { groups, items, customItemId: custom?.id || null };
+  catalogCache = { at: Date.now(), data };
+  return data;
+}
+export function findItem(catalog, itemId) { return (catalog?.items || []).find((i) => i.id === itemId) || null; }
+
 // Issue a NEW gift card by creating a GiftUp order. Payment has already been collected by us
 // (Stripe for abroad, Hubtel for local), so this just records the sale and lets GiftUp generate
 // the code + email the branded voucher (unless sendEmails=false, e.g. while testing). value/price
 // are in the card's currency (GHS — the GiftUp store currency). Returns { orderId, orderNumber,
 // cards:[{code,value}], downloadLinks }. `reference` is stamped as externalPaymentId for reconciliation.
 export async function issueOrder({
-  value, price, purchaserName, purchaserEmail, recipient, reference,
+  value, price, itemId, purchaserName, purchaserEmail, recipient, reference,
   sku, itemName, sendEmails = true, scheduledFor,
 } = {}) {
   if (!CONFIG.giftupKey) throw new Error('GiftUp API key not configured');
@@ -97,20 +123,19 @@ export async function issueOrder({
   if (!(v > 0)) throw new Error('Invalid gift card value');
   const cost = price != null ? Number(price) : v;
 
+  // When an itemId is given (a chosen package) reference it so the card inherits that item's
+  // design, name and terms; GiftUp still honours the value/price we pass for a Currency card.
+  const item = itemId
+    ? { id: itemId, quantity: 1, value: v, price: cost }
+    : { quantity: 1, name: itemName || 'Niobe Beauty Gift Card', backingType: 'Currency', price: cost, value: v, sku: sku || `NIOBE-GC-${v}` };
+
   const body = {
     orderDate: new Date().toISOString(),
     disableAllEmails: !sendEmails,
     purchaserName: purchaserName || recipient?.name || 'Niobe customer',
     purchaserEmail: purchaserEmail || recipient?.email || undefined,
     revenue: cost,
-    itemDetails: [{
-      quantity: 1,
-      name: itemName || 'Niobe Beauty Gift Card',
-      backingType: 'Currency',
-      price: cost,
-      value: v,
-      sku: sku || `NIOBE-GC-${v}`,
-    }],
+    itemDetails: [item],
     recipientDetails: {
       recipientName: recipient?.name || purchaserName || 'Niobe customer',
       recipientEmail: recipient?.email || purchaserEmail,
