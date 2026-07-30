@@ -61,6 +61,11 @@ export const CONFIG = {
   fxBufferPct: Number(process.env.FX_BUFFER_PCT ?? 3),
   stripeUkSecret: process.env.STRIPE_UK_SECRET || '',
 
+  // GiftUp gift-card rail — redeem a GiftUp gift card against a booking instead of a cash deposit.
+  // Key is a Bearer JWT from the GiftUp dashboard; kept server-side only (never in git).
+  giftupKey: process.env.GIFTUP_API_KEY || '',
+  giftupTestMode: bool(process.env.GIFTUP_TEST_MODE, false),
+
   currency: process.env.CURRENCY || 'GHS',
   // Deposit rule: minimum 50% or pay in full (same across all services/branches).
   depositMinPercent: Number(process.env.DEPOSIT_MIN_PERCENT || 50),
