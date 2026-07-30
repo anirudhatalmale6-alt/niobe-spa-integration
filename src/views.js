@@ -264,7 +264,7 @@ export function renderGiftCardPage(catalog, note) {
         <button class="btn" type="submit">Continue to secure payment</button>
         ${intlBtn}
       </form>
-      <div class="note">Payments are processed securely by ${GATEWAY} (cards, mobile money and bank transfer)${CONFIG.intlCurrency ? `, or by card in ${CONFIG.intlCurrency} for buyers abroad` : ''}.${feeLine}</div>
+      <div class="note">${CONFIG.giftCardSurchargePct > 0 ? `A ${CONFIG.giftCardSurchargePct}% service fee is added at checkout. ` : ''}Payments are processed securely by ${GATEWAY} (cards, mobile money and bank transfer)${CONFIG.intlCurrency ? `, or by card in ${CONFIG.intlCurrency} for buyers abroad` : ''}.${feeLine}</div>
     </div>
     <script>
       var f=document.getElementById('gcform'),amt=document.getElementById('amt');
@@ -296,11 +296,17 @@ export function renderGiftCheckout(pur) {
   const rateRow = isIntl && pur.chargeRate
     ? `<div class="row"><span class="k">Live exchange rate</span><span class="v">1 ${pur.chargeCurrency} = ${GHS(pur.chargeRate)}</span></div>`
     : '';
+  const feeRow = pur.feeGHS > 0
+    ? `<div class="row"><span class="k">Service fee (${pur.surchargePct}%)</span><span class="v">${GHS(pur.feeGHS)}</span></div>`
+    : '';
   const amountRows = isIntl
     ? `<div class="row"><span class="k">Gift card value</span><span class="v">${GHS(pur.amount)}</span></div>
+       ${feeRow}
        ${rateRow}
        <div class="row"><span class="k">Charged to your card</span><span class="v">${chargeStr}</span></div>`
-    : `<div class="row"><span class="k">Gift card value</span><span class="v">${GHS(pur.amount)}</span></div>`;
+    : `<div class="row"><span class="k">Gift card value</span><span class="v">${GHS(pur.amount)}</span></div>
+       ${feeRow}
+       <div class="row"><span class="k">You pay</span><span class="v">${chargeStr}</span></div>`;
   return shell(`${name} Test Checkout`, `
     <div class="brand"><div class="n">${name} <span class="badge">TEST</span></div><div class="t">Simulated secure checkout</div></div>
     <div class="card">

@@ -81,16 +81,23 @@ export async function startPurchase(input, preferredGateway) {
   const p = { ...buyer, amount: sel.value, itemId: sel.itemId, packageName: sel.packageName };
   const reference = makeGiftRef();
 
-  // The card VALUE is always GHS; abroad buyers are simply CHARGED the GBP equivalent (+ markup).
+  // The card is worth its FACE value (p.amount, GHS). The buyer pays that plus the service fee
+  // (covers GiftUp's commission + processing) — a straight surcharge on the GHS amount.
+  const surchargePct = CONFIG.giftCardSurchargePct;
+  const feeGHS = Math.round(p.amount * (surchargePct / 100) * 100) / 100;
+  const payableGHS = Math.round((p.amount + feeGHS) * 100) / 100;
+
+  // Abroad buyers are CHARGED the GBP equivalent of the payable amount (+ FX markup); the card
+  // value stays GHS. Locals pay the payable amount in cedis.
   const charge = preferredGateway === 'international'
-    ? await convertFromGHS(p.amount, CONFIG.intlCurrency)
-    : { amount: p.amount, currency: 'GHS' };
+    ? await convertFromGHS(payableGHS, CONFIG.intlCurrency)
+    : { amount: payableGHS, currency: 'GHS' };
 
   const init = await initializeTransaction({
     email: p.buyerEmail,
-    amount: p.amount,
+    amount: payableGHS,            // Hubtel/expressPay charge this GHS amount (value + fee)
     reference,
-    chargeAmount: charge.amount,
+    chargeAmount: charge.amount,   // Stripe charges this (GBP) for the abroad rail
     chargeCurrency: charge.currency,
     callbackUrl: `${CONFIG.publicUrl}/gift-card/callback?reference=${encodeURIComponent(reference)}`,
     metadata: { type: 'giftcard', reference, buyerName: p.buyerName, gift: p.gift, recipientName: p.recipient.name },
@@ -98,6 +105,7 @@ export async function startPurchase(input, preferredGateway) {
 
   purchases.set(reference, {
     reference, ...p, gateway: init.gateway,
+    surchargePct, feeGHS, payableGHS,
     chargeAmount: charge.amount, chargeCurrency: charge.currency, chargeRate: charge.rate,
     status: 'pending',
   });
@@ -118,8 +126,8 @@ export async function finalizePurchase(reference) {
   // paid sale (never lose the money) and flag it for manual issue rather than failing the customer.
   try {
     const order = await issueOrder({
-      value: pur.amount,
-      price: pur.amount,                         // card is GHS-valued regardless of how they paid
+      value: pur.amount,                         // card balance = face value (GHS)
+      price: pur.payableGHS ?? pur.amount,       // what the buyer actually paid (incl. service fee)
       itemId: pur.itemId,                        // chosen package (inherits its design) or custom-amount item
       itemName: pur.packageName || undefined,
       purchaserName: pur.buyerName,

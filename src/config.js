@@ -69,6 +69,10 @@ export const CONFIG = {
   giftCardMinAmount: Number(process.env.GIFTCARD_MIN || 100),
   giftCardMaxAmount: Number(process.env.GIFTCARD_MAX || 10000),
   giftCardValidityDays: Number(process.env.GIFTCARD_VALIDITY_DAYS || 90),
+  // Customer-facing service fee added to a gift-card purchase (covers GiftUp's commission +
+  // card processing) — mirrors the surcharge on the GiftUp storefront. The card is worth its
+  // face value; the buyer pays value x (1 + this%). Set to 0 to disable.
+  giftCardSurchargePct: Number(process.env.GIFTCARD_SURCHARGE_PCT ?? 5),
 
   currency: process.env.CURRENCY || 'GHS',
   // Deposit rule: minimum 50% or pay in full (same across all services/branches).
