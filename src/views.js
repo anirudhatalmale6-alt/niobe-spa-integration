@@ -177,6 +177,127 @@ export function renderCheckout(pay, booking) {
     </div>`, `${name} Test Mode`);
 }
 
+// --- Online gift-card purchase ---
+
+export function renderGiftCardPage(note) {
+  const min = CONFIG.giftCardMinAmount;
+  const presets = [200, 500, 1000].filter((v) => v >= min);
+  const chips = [min, ...presets].map((v) =>
+    `<button type="button" class="chip" data-amt="${v}">${GHS(v)}</button>`).join('');
+  const intlBtn = CONFIG.intlCurrency
+    ? `<button class="btnAlt" type="submit" name="gateway" value="international">Paying from abroad? Pay in ${CONFIG.intlCurrency}</button>`
+    : '';
+  return shell('Buy a Niobe Beauty gift card', `
+    <div class="brand"><div class="n">Niobe Beauty</div><div class="t">Gift cards</div></div>
+    <div class="card">
+      <h2 style="margin-top:2px">Send the gift of Niobe</h2>
+      <p style="color:var(--muted);font-size:14px;margin:0 0 14px">Redeemable at any Niobe branch, valid for ${CONFIG.giftCardValidityDays} days. The voucher is emailed as soon as payment clears.</p>
+      ${note ? `<div class="note" style="color:#b0492e;margin:0 0 12px">${note}</div>` : ''}
+      <form method="POST" action="/gift-card/start" id="gcform">
+        <label class="lab" style="font-size:13px;color:var(--muted)">Amount (GHS)</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 10px">${chips}</div>
+        <input name="amount" id="amt" type="number" min="${min}" step="1" inputmode="numeric" placeholder="Enter an amount (min GHS ${min})" required
+          style="width:100%;padding:13px 14px;border:1.5px solid var(--line);border-radius:12px;font-size:16px">
+
+        <label class="opt" style="cursor:pointer;margin-top:14px">
+          <span><span class="lab">Send it as a gift to someone else</span><br>
+            <span class="sub">We'll email the voucher to them with your message</span></span>
+          <input type="checkbox" name="asGift" id="asGift" value="true" style="transform:scale(1.3)">
+        </label>
+
+        <div id="recip" style="display:none">
+          <input name="recipientName" placeholder="Recipient's name"
+            style="width:100%;padding:13px 14px;border:1.5px solid var(--line);border-radius:12px;font-size:15px;margin:8px 0">
+          <input name="recipientEmail" type="email" placeholder="Recipient's email"
+            style="width:100%;padding:13px 14px;border:1.5px solid var(--line);border-radius:12px;font-size:15px;margin:0 0 8px">
+          <textarea name="message" rows="2" placeholder="Your message (optional)"
+            style="width:100%;padding:13px 14px;border:1.5px solid var(--line);border-radius:12px;font-size:15px;margin:0 0 8px;resize:vertical"></textarea>
+          <label class="lab" style="font-size:12px;color:var(--muted)">Deliver on (optional)</label>
+          <input name="deliveryDate" type="date"
+            style="width:100%;padding:12px 14px;border:1.5px solid var(--line);border-radius:12px;font-size:15px;margin:4px 0 4px">
+        </div>
+
+        <div style="border-top:1px dashed var(--line);margin:14px 0 10px"></div>
+        <label class="lab" style="font-size:13px;color:var(--muted)">Your name</label>
+        <input name="buyerName" placeholder="Your name"
+          style="width:100%;padding:13px 14px;border:1.5px solid var(--line);border-radius:12px;font-size:15px;margin:6px 0 8px">
+        <label class="lab" style="font-size:13px;color:var(--muted)">Your email (for the receipt)</label>
+        <input name="buyerEmail" type="email" placeholder="you@example.com" required
+          style="width:100%;padding:13px 14px;border:1.5px solid var(--line);border-radius:12px;font-size:15px;margin:6px 0 12px">
+
+        <button class="btn" type="submit">Continue to secure payment</button>
+        ${intlBtn}
+      </form>
+      <div class="note">Payments are processed securely by ${GATEWAY} (cards, mobile money and bank transfer)${CONFIG.intlCurrency ? `, or by card in ${CONFIG.intlCurrency} for buyers abroad` : ''}.${feeLine}</div>
+    </div>
+    <script>
+      var f=document.getElementById('gcform'),amt=document.getElementById('amt');
+      f.querySelectorAll('.chip').forEach(function(c){c.addEventListener('click',function(){amt.value=c.getAttribute('data-amt');
+        f.querySelectorAll('.chip').forEach(function(x){x.style.borderColor='var(--line)'});c.style.borderColor='var(--gold)';});});
+      document.getElementById('asGift').addEventListener('change',function(e){document.getElementById('recip').style.display=e.target.checked?'block':'none';});
+    </script>
+    <style>.chip{border:1.5px solid var(--line);background:#fff;border-radius:20px;padding:8px 14px;font-size:14px;font-weight:600;color:var(--gold-deep);cursor:pointer}.chip:hover{border-color:var(--gold)}</style>`);
+}
+
+// Demo (test-mode) checkout for a gift-card purchase — mirrors renderCheckout but for a sale.
+export function renderGiftCheckout(pur) {
+  const name = displayNameOf(pur.gateway);
+  const isIntl = pur.chargeCurrency && pur.chargeCurrency !== 'GHS';
+  const chargeStr = money(pur.chargeAmount ?? pur.amount, pur.chargeCurrency || 'GHS');
+  const rateRow = isIntl && pur.chargeRate
+    ? `<div class="row"><span class="k">Live exchange rate</span><span class="v">1 ${pur.chargeCurrency} = ${GHS(pur.chargeRate)}</span></div>`
+    : '';
+  const amountRows = isIntl
+    ? `<div class="row"><span class="k">Gift card value</span><span class="v">${GHS(pur.amount)}</span></div>
+       ${rateRow}
+       <div class="row"><span class="k">Charged to your card</span><span class="v">${chargeStr}</span></div>`
+    : `<div class="row"><span class="k">Gift card value</span><span class="v">${GHS(pur.amount)}</span></div>`;
+  return shell(`${name} Test Checkout`, `
+    <div class="brand"><div class="n">${name} <span class="badge">TEST</span></div><div class="t">Simulated secure checkout</div></div>
+    <div class="card">
+      <div class="row"><span class="k">Pay to</span><span class="v">Niobe Beauty</span></div>
+      <div class="row"><span class="k">Buyer</span><span class="v">${pur.buyerEmail}</span></div>
+      ${pur.gift ? `<div class="row"><span class="k">Gift for</span><span class="v">${pur.recipient.name}</span></div>` : ''}
+      ${amountRows}
+      <div class="row"><span class="k">Reference</span><span class="v" style="font-family:ui-monospace,monospace;font-size:12px">${pur.reference}</span></div>
+      <form method="POST" action="/demo/pay" style="margin-top:16px">
+        <input type="hidden" name="reference" value="${pur.reference}">
+        <button class="btn" type="submit">Pay ${chargeStr} now</button>
+      </form>
+      <div class="note">This is a simulated ${name} screen for testing — no real money moves and no live card is created. With live keys it becomes the real checkout.${feeLine}</div>
+    </div>`, `${name} Test Mode`);
+}
+
+export function renderGiftCardSuccess(result) {
+  const pur = result.purchase || {};
+  const card = (result.cards && result.cards[0]) || (pur.cards && pur.cards[0]) || null;
+  const pdf = (result.downloadLinks || pur.downloadLinks)?.single?.pdfUrl;
+  if (result.pendingIssue) {
+    return shell('Payment received', `
+      <div class="brand"><div class="n">Niobe Beauty</div><div class="t">Gift card</div></div>
+      <div class="card center"><div class="tick">✓</div>
+        <h2>Payment received — voucher on its way</h2>
+        <div class="ref">${pur.reference || ''}</div>
+        <div class="note">Thank you! Your payment has gone through. We're just finalising your gift card and it'll be emailed to ${pur.gift ? pur.recipient?.email : pur.buyerEmail} very shortly. If you don't see it soon, contact us with the reference above.</div>
+      </div>`);
+  }
+  const to = pur.gift ? pur.recipient?.email : pur.buyerEmail;
+  return shell('Gift card issued', `
+    <div class="brand"><div class="n">Niobe Beauty</div><div class="t">Gift card</div></div>
+    <div class="card center">
+      <div class="tick">✓</div>
+      <h2>Your gift card is on its way</h2>
+      ${card ? `<div class="ref">Code: ${card.code}</div>` : ''}
+      <div style="text-align:left;margin-top:8px">
+        <div class="row"><span class="k">Value</span><span class="v">${GHS(pur.amount)}</span></div>
+        ${card ? `<div class="row"><span class="k">Card code</span><span class="v" style="font-family:ui-monospace,monospace">${card.code}</span></div>` : ''}
+        <div class="row"><span class="k">Valid for</span><span class="v">${CONFIG.giftCardValidityDays} days</span></div>
+        ${pur.gift ? `<div class="row"><span class="k">Sent to</span><span class="v">${pur.recipient?.name}</span></div>` : ''}
+      </div>
+      <div class="note">A branded voucher has been emailed to ${to}. It can be redeemed against any service at any Niobe branch.${pdf ? `<br><a class="btnAlt" href="${pdf}" style="margin-top:12px" target="_blank" rel="noopener">Download the voucher (PDF)</a>` : ''}</div>
+    </div>`);
+}
+
 export function renderSuccess(result) {
   const b = result.booking || {};
   const pay = result.payment || {};

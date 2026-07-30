@@ -6,8 +6,9 @@ import { CONFIG, branchById } from './config.js';
 import { getConsolidatedStock } from './stock.js';
 import { getUnifiedAvailability, listServiceNames } from './availability.js';
 import { getBooking, bookingDeposit, startDeposit, finalizeDeposit, listBookings, getPayment, lookupBookings, claimAccountCredit } from './bookings.js';
+import { startPurchase, finalizePurchase, getPurchase } from './giftcards.js';
 import { verifyWebhookSignature, parseWebhookEvent, displayName as gatewayName } from './gateway.js';
-import { renderPayPage, renderCheckout, renderSuccess, renderPhoneEntry, renderChooser, renderNoMatch, renderCreditClaim } from './views.js';
+import { renderPayPage, renderCheckout, renderSuccess, renderPhoneEntry, renderChooser, renderNoMatch, renderCreditClaim, renderGiftCardPage, renderGiftCheckout, renderGiftCardSuccess } from './views.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(__dirname, '..', 'public');
@@ -79,13 +80,40 @@ const server = createServer(async (req, res) => {
       return html(res, 200, renderCreditClaim(b));
     }
     if (req.method === 'GET' && p === '/demo/checkout') {
-      const pay = getPayment(url.searchParams.get('reference'));
+      const reference = url.searchParams.get('reference');
+      // The same simulated checkout serves both booking deposits and gift-card purchases.
+      const pur = getPurchase(reference);
+      if (pur) return html(res, 200, renderGiftCheckout(pur));
+      const pay = getPayment(reference);
       if (!pay) return html(res, 404, 'Unknown reference');
       return html(res, 200, renderCheckout(pay, await getBooking(pay.bookingId)));
     }
     if (req.method === 'POST' && p === '/demo/pay') {
       const body = parseBody(await readBody(req), req.headers['content-type']);
-      return redirect(res, `/pay/callback?reference=${encodeURIComponent(body.reference)}`);
+      const ref = body.reference;
+      // Route the simulated "paid" back to the right finaliser (gift-card sale vs booking deposit).
+      const dest = getPurchase(ref) ? '/gift-card/callback' : '/pay/callback';
+      return redirect(res, `${dest}?reference=${encodeURIComponent(ref)}`);
+    }
+
+    // --- Online gift-card purchase ---
+    if (req.method === 'GET' && p === '/gift-card') {
+      return html(res, 200, renderGiftCardPage());
+    }
+    if (req.method === 'POST' && p === '/gift-card/start') {
+      const body = parseBody(await readBody(req), req.headers['content-type']);
+      try {
+        const { authorization_url } = await startPurchase(body, body.gateway);
+        return redirect(res, authorization_url);
+      } catch (e) {
+        // Show the buyer a friendly message on the form rather than a raw error.
+        return html(res, 400, renderGiftCardPage(e.message || 'Something went wrong — please check your details and try again.'));
+      }
+    }
+    if (req.method === 'GET' && p === '/gift-card/callback') {
+      const result = await finalizePurchase(url.searchParams.get('reference'));
+      if (!result.ok) return html(res, 402, 'Payment was not completed. Please try again.');
+      return html(res, 200, renderGiftCardSuccess(result));
     }
     if (req.method === 'GET' && p === '/pay/callback') {
       const result = await finalizeDeposit(url.searchParams.get('reference'));

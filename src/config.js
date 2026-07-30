@@ -65,6 +65,10 @@ export const CONFIG = {
   // Key is a Bearer JWT from the GiftUp dashboard; kept server-side only (never in git).
   giftupKey: process.env.GIFTUP_API_KEY || '',
   giftupTestMode: bool(process.env.GIFTUP_TEST_MODE, false),
+  // Online gift-card sales (issued via GiftUp). Amounts are in GHS (the GiftUp store currency).
+  giftCardMinAmount: Number(process.env.GIFTCARD_MIN || 100),
+  giftCardMaxAmount: Number(process.env.GIFTCARD_MAX || 10000),
+  giftCardValidityDays: Number(process.env.GIFTCARD_VALIDITY_DAYS || 90),
 
   currency: process.env.CURRENCY || 'GHS',
   // Deposit rule: minimum 50% or pay in full (same across all services/branches).
