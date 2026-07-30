@@ -152,8 +152,12 @@ export function renderCheckout(pay, booking) {
   const name = displayNameOf(pay.gateway);
   const isIntl = pay.chargeCurrency && pay.chargeCurrency !== 'GHS';
   const chargeStr = money(pay.chargeAmount ?? pay.amount, pay.chargeCurrency || 'GHS');
+  const rateRow = isIntl && pay.chargeRate
+    ? `<div class="row"><span class="k">Live exchange rate</span><span class="v">1 ${pay.chargeCurrency} = ${GHS(pay.chargeRate)}</span></div>`
+    : '';
   const amountRows = isIntl
     ? `<div class="row"><span class="k">Your deposit (secures your slot)</span><span class="v">${GHS(pay.amount)}</span></div>
+       ${rateRow}
        <div class="row"><span class="k">Charged to your card</span><span class="v">${chargeStr}</span></div>`
     : `<div class="row"><span class="k">Amount</span><span class="v">${GHS(pay.amount)}</span></div>`;
   return shell(`${name} Test Checkout`, `

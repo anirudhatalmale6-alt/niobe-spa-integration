@@ -212,7 +212,7 @@ export async function startDeposit(bookingId, optionId, preferredGateway) {
   }, preferredGateway);
 
   payments.set(reference, { reference, bookingId: b.id, amount: chosen.amount, optionId: chosen.id,
-    gateway: init.gateway, chargeAmount: charge.amount, chargeCurrency: charge.currency, status: 'pending' });
+    gateway: init.gateway, chargeAmount: charge.amount, chargeCurrency: charge.currency, chargeRate: charge.rate, status: 'pending' });
   return { authorization_url: init.authorization_url, reference, amount: chosen.amount, gateway: init.gateway };
 }
 
