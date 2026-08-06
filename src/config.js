@@ -126,6 +126,14 @@ export const CONFIG = {
   //   'config'   — use the static per-branch hours only.
   hoursSource: (process.env.HOURS_SOURCE || 'simplespa').toLowerCase(),
   derivedHoursTtlMs: Number(process.env.DERIVED_HOURS_TTL_MS || 30 * 60 * 1000),
+
+  // --- Notifications (deposit-link email/SMS) ---
+  // Email via Microsoft Graph (app-only) as the client's M365 mailbox.
+  notifyEmailEnabled: bool(process.env.NOTIFY_EMAIL_ENABLED, false),
+  notifyEmailFrom: process.env.NOTIFY_EMAIL_FROM || process.env.NOTIFY_EMAIL || '',
+  graphTenantId: process.env.GRAPH_TENANT_ID || '',
+  graphClientId: process.env.GRAPH_CLIENT_ID || '',
+  graphClientSecret: process.env.GRAPH_CLIENT_SECRET || '',
   // Public base URL of this service (used to build Paystack callback/return links).
   publicUrl: process.env.PUBLIC_URL || `http://localhost:${Number(process.env.PORT || 3000)}`,
 };
