@@ -24,8 +24,10 @@ import { mockAvailabilityData } from './mockData.js';
 // ---------------------------------------------------------------------------
 
 // Appointment statuses that occupy a therapist's time (everything except a
-// cancellation (15) or a no-show (17), which leave the slot open).
-const BLOCKING_STATUS = new Set([0, 5, 20, 25, 30]);
+// cancellation (15) or a no-show (17), which leave the slot open). Includes
+// 10 Online and 22 Confirmed (No SMS) — both real bookings that block a slot;
+// omitting them would let availability double-book over an online reservation.
+const BLOCKING_STATUS = new Set([0, 5, 10, 20, 22, 25, 30]);
 
 // Map a JS weekday (0 = Sunday … 6 = Saturday) to SimpleSpa's (0 = Monday … 6 = Sunday).
 const toSpaDay = (jsDay) => (jsDay + 6) % 7;

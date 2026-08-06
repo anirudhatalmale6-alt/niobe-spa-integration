@@ -49,10 +49,14 @@ const STATUS_CANCELLED = 15; // SimpleSpa: 15 = Cancelled (frees the slot)
 const STATUS_CONFIRMED = 20; // SimpleSpa: 20 = Confirmed
 
 // Statuses that mean the slot is NOT an open, unsecured hold anymore.
-// 15 Cancelled, 17 No-Show, 20 Confirmed, 25 Arrived, 30 Paid.
-const SETTLED_STATUS = new Set([15, 17, 20, 25, 30]);
-// Statuses that ARE an unsecured hold we may release: 0 New, 5 Rebooked.
-const HOLD_STATUS = new Set([0, 5]);
+// 15 Cancelled, 17 No-Show, 20 Confirmed, 22 Confirmed (No SMS), 25 Arrived, 30 Paid.
+const SETTLED_STATUS = new Set([15, 17, 20, 22, 25, 30]);
+// Statuses that ARE an unsecured hold we may release. Determined from live data
+// across all branches: 5 Rebooked and 10 ONLINE are real unsecured client
+// bookings (10 = the online-booking loophole this whole engine targets). 0 New
+// is included for completeness but in practice is 100% staff time-blocks (no
+// client) — isClientBooking() filters those out so they are never released.
+const HOLD_STATUS = new Set([0, 5, 10]);
 
 // A real client booking, as opposed to a staff time-block. SimpleSpa "blocks"
 // share status 0 (New) but are marked by client.first_name === "_block", carry a

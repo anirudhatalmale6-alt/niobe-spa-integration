@@ -42,9 +42,9 @@ const bookings = new Map();      // booking id -> booking object (cache)
 const payments = new Map();      // reference   -> payment record
 
 // Statuses that mean the appointment is already dealt with (no deposit to collect):
-// 15 Cancelled, 17 No-Show, 20 Confirmed, 25 Arrived, 30 Paid. Anything else (New,
-// Rebooked, …) with a real client is a booking that can still take a deposit.
-const SETTLED_STATUS = new Set([15, 17, 20, 25, 30]);
+// 15 Cancelled, 17 No-Show, 20 Confirmed, 22 Confirmed (No SMS), 25 Arrived, 30 Paid.
+// Anything else (Rebooked, Online, …) with a real client can still take a deposit.
+const SETTLED_STATUS = new Set([15, 17, 20, 22, 25, 30]);
 
 const last9 = (s) => String(s || '').replace(/\D/g, '').slice(-9);
 // Live booking ids are `<branchId>~<appointment_id>` so a booking can be re-fetched from
