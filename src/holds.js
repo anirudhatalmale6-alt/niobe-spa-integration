@@ -53,6 +53,18 @@ const SETTLED_STATUS = new Set([15, 17, 20, 25, 30]);
 // Statuses that ARE an unsecured hold we may release: 0 New, 5 Rebooked.
 const HOLD_STATUS = new Set([0, 5]);
 
+// A real client booking, as opposed to a staff time-block. SimpleSpa "blocks"
+// share status 0 (New) but are marked by client.first_name === "_block", carry a
+// null mobile and an empty service name — they are deliberate staff reservations
+// and must NEVER be auto-released. A genuine bookable hold has a real client with
+// a mobile number (also required for the deposit-link lookup). Verified against
+// live data: 92 of 93 "New" East Legon appointments were blocks, 1 real booking.
+function isClientBooking(appt) {
+  const first = String(appt.client?.first_name || '').trim().toLowerCase();
+  if (first === '_block') return false;
+  return !!(appt.client && appt.client.mobile);
+}
+
 const DATA_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
 function auditRelease(entry) {
   try {
@@ -116,7 +128,9 @@ async function fetchOpenHolds(branch) {
     const total = res.total_results ?? all.length;
     if (all.length >= total || items.length === 0) break;
   }
-  return all.filter((a) => HOLD_STATUS.has(Number(a.status)));
+  // Only New/Rebooked appointments that are real client bookings — staff blocks
+  // (status 0, no client) are intentional and never release candidates.
+  return all.filter((a) => HOLD_STATUS.has(Number(a.status)) && isClientBooking(a));
 }
 
 // Is this appointment secured by something other than the release engine?
@@ -218,8 +232,39 @@ export async function sweepBranch(branch, now = new Date()) {
   };
 }
 
+// A deterministic, PII-free sample sweep for DEMO_MODE — lets the no-show
+// dashboard be shown/tested without touching live data or exposing real clients.
+function demoSweep(now) {
+  const iso = (mins) => new Date(now.getTime() + mins * 60000).toISOString();
+  const row = (o) => ({ appointment_id: o.id, start: o.start, client: o.client, phone: o.phone, service: o.service, status_label: 'New', deadline: o.deadline, tracked: true, ...o.extra });
+  const east = {
+    branchId: 'east_legon', name: 'East Legon', ok: true, openHolds: 4,
+    candidates: [row({ id: 'D1', start: iso(180), client: 'Ama Boateng', phone: '0244 000 111', service: 'Deep Tissue Massage (60m)', deadline: iso(-25), extra: { result: 'dry_run_would_release' } })],
+    released: [],
+    waiting: [row({ id: 'D2', start: iso(300), client: 'Kojo Mensah', phone: '0209 222 333', service: 'Classic Facial (45m)', deadline: iso(35) })],
+    kept: [row({ id: 'D3', start: iso(240), client: 'Efua Sarpong', phone: '0277 444 555', service: 'Hot Stone Massage (90m)', deadline: iso(-10), extra: { reason: 'deposit paid' } })],
+    skipped: [{ appointment_id: 'D4' }],
+    counts: { released: 0, candidates: 1, waiting: 1, kept: 1, skipped: 1 },
+  };
+  const cant = {
+    branchId: 'cantonments', name: 'Cantonments', ok: true, openHolds: 2,
+    candidates: [row({ id: 'D5', start: iso(120), client: 'Yaw Owusu', phone: '0201 666 777', service: 'Swedish Massage (60m)', deadline: iso(-40), extra: { result: 'dry_run_would_release' } })],
+    released: [], waiting: [],
+    kept: [row({ id: 'D6', start: iso(400), client: 'Adjoa Nyarko', phone: '0555 888 999', service: 'Manicure + Pedicure', deadline: iso(-5), extra: { reason: 'account credit' } })],
+    skipped: [],
+    counts: { released: 0, candidates: 1, waiting: 0, kept: 1, skipped: 0 },
+  };
+  return {
+    generatedAt: now.toISOString(), dryRun: CONFIG.releaseDryRun, scope: CONFIG.releaseScope,
+    graceMinutes: CONFIG.releaseGraceMinutes,
+    branches: [east, cant],
+    totals: { released: 0, candidates: 2, waiting: 1, kept: 2, skipped: 1, openHolds: 6, errors: 0 },
+  };
+}
+
 // Sweep every branch. Runs branches in parallel; each is independent.
 export async function sweepAll(now = new Date()) {
+  if (CONFIG.demoMode) return demoSweep(now);
   const branches = await Promise.all(BRANCHES.map((b) => sweepBranch(b, now)));
   const totals = branches.reduce((t, b) => {
     if (!b.ok) { t.errors++; return t; }

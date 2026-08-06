@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Niobe Beauty — No-Show Holds</title>
+<style>
+  :root{
+    --bg:#f6f1ec; --card:#fffdfb; --ink:#2b2320; --muted:#8b7d73;
+    --line:#e9ddd2; --gold:#b08a54; --gold-deep:#8a6a3c;
+    --ok:#3f7d5b; --low:#c98a2b; --out:#b5493f; --wait:#5b6f8a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--ink)}
+  header{background:linear-gradient(120deg,#2b2320,#3a2f28);color:#f6efe6;padding:20px 26px}
+  .brand{display:flex;align-items:center;gap:12px}
+  .brand h1{margin:0;font-size:20px;font-weight:600;letter-spacing:.3px}
+  .brand .dot{width:10px;height:10px;border-radius:50%;background:var(--gold)}
+  .sub{color:#d8c7b3;font-size:13px;margin-top:2px}
+  .nav{margin-top:10px;display:flex;gap:8px;flex-wrap:wrap}
+  .nav a{font-size:13px;color:#e7d7c1;text-decoration:none;padding:5px 12px;border-radius:20px;border:1px solid #55463c}
+  .nav a.active{background:var(--gold);color:#2b2320;border-color:var(--gold);font-weight:600}
+  .wrap{max-width:1180px;margin:0 auto;padding:20px}
+  .tiles{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:18px 0}
+  .tile{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .tile .n{font-size:26px;font-weight:700}
+  .tile .l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-top:2px}
+  .tile.rel .n{color:var(--out)} .tile.wait .n{color:var(--wait)} .tile.keep .n{color:var(--ok)}
+  .mode{display:flex;align-items:center;gap:10px;padding:11px 15px;border-radius:10px;font-size:14px;margin-bottom:16px;font-weight:600}
+  .mode.dry{background:#fbf4e8;border:1px solid #ecdcbf;color:#7a5c25}
+  .mode.live{background:#fbeceb;border:1px solid #e7c3bf;color:#8a352e}
+  .mode .pill{font-size:12px;font-weight:600;background:#fff;border:1px solid var(--line);border-radius:20px;padding:3px 10px;color:var(--muted)}
+  .bcard{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;margin-bottom:14px}
+  .bhead{display:flex;justify-content:space-between;align-items:center;padding:13px 16px;background:#f3e9dd;border-bottom:1px solid var(--line)}
+  .bhead .bn{font-weight:600}
+  .bhead .meta{font-size:12px;color:var(--muted)}
+  .rows{padding:6px 0}
+  .row{display:grid;grid-template-columns:120px 1fr 150px 160px;gap:10px;padding:9px 16px;border-bottom:1px solid #f1e7db;font-size:13px;align-items:center}
+  .row:last-child{border-bottom:none}
+  .row .who{font-weight:600}
+  .row .svc{color:var(--muted)}
+  .tag{display:inline-block;font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px}
+  .tag.rel{background:#fbeceb;color:var(--out);border:1px solid #e7c3bf}
+  .tag.wait{background:#eef1f6;color:var(--wait);border:1px solid #cdd7e6}
+  .tag.done{background:#eaf3ee;color:var(--ok);border:1px solid #c3ddca}
+  .sec{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;padding:10px 16px 4px;font-weight:600}
+  .empty{padding:14px 16px;color:var(--muted);font-size:13px}
+  .skiprow{padding:10px 16px;color:var(--muted);font-size:12px;border-top:1px solid #f1e7db}
+  .banner{background:#fbf4e8;border:1px solid #ecdcbf;color:#7a5c25;padding:8px 12px;border-radius:9px;font-size:13px;margin-bottom:12px}
+  .refresh{font-size:13px;color:#e7d7c1;border:1px solid #55463c;background:transparent;border-radius:20px;padding:5px 14px;cursor:pointer}
+  footer{color:var(--muted);font-size:12px;text-align:center;padding:18px}
+  @media(max-width:720px){.tiles{grid-template-columns:repeat(2,1fr)} .row{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap" style="padding:0">
+    <div class="brand"><span class="dot"></span><h1>Niobe Beauty — No-Show Holds</h1></div>
+    <div class="sub">Unsecured slots and the secure-or-release engine, across all branches</div>
+    <div class="nav">
+      <a href="/holds.html" class="active">No-Show Holds</a>
+      <a href="/availability.html">Availability</a>
+      <a href="/index.html">Cross-Branch Stock</a>
+      <button class="refresh" onclick="load()">Refresh</button>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div id="err" class="banner" style="display:none"></div>
+  <div id="mode" class="mode dry" style="display:none"></div>
+
+  <div class="tiles">
+    <div class="tile"><div class="n" id="t-open">–</div><div class="l">Open holds</div></div>
+    <div class="tile wait"><div class="n" id="t-wait">–</div><div class="l">Within grace</div></div>
+    <div class="tile rel"><div class="n" id="t-rel">–</div><div class="l" id="t-rel-l">Would release</div></div>
+    <div class="tile keep"><div class="n" id="t-keep">–</div><div class="l">Secured / protected</div></div>
+    <div class="tile"><div class="n" id="t-skip">–</div><div class="l">Out of scope</div></div>
+  </div>
+
+  <div id="branches"></div>
+</div>
+
+<footer>Secure-or-release engine · report-only mode writes nothing to SimpleSpa · every release is logged for audit.</footer>
+
+<script>
+const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = iso => { if(!iso) return '—'; const d=new Date(iso); return isNaN(d)?esc(iso):d.toLocaleString('en-GB',{weekday:'short',hour:'2-digit',minute:'2-digit',day:'2-digit',month:'short'}); };
+
+function rowHtml(r, kind){
+  const tag = kind==='rel' ? `<span class="tag rel">${r.result==='released'?'Released':'Would release'}</span>`
+    : kind==='wait' ? `<span class="tag wait">Secure by ${fmt(r.deadline)}</span>`
+    : `<span class="tag done">${esc(r.reason||'Secured')}</span>`;
+  return `<div class="row">
+    <div>${fmt(r.start)}</div>
+    <div><div class="who">${esc(r.client||'(no name)')}</div><div class="svc">${esc(r.service||'')}</div></div>
+    <div>${esc(r.phone||'')}</div>
+    <div>${tag}</div>
+  </div>`;
+}
+
+function branchHtml(b){
+  if(!b.ok) return `<div class="bcard"><div class="bhead"><span class="bn">${esc(b.name)}</span><span class="meta" style="color:var(--out)">read error: ${esc(b.error||'')}</span></div></div>`;
+  const c = b.counts;
+  let inner = '';
+  if(b.candidates.length){ inner += `<div class="sec">To release — unsecured past deadline</div>` + b.candidates.map(r=>rowHtml(r,'rel')).join(''); }
+  if(b.released.length){ inner += `<div class="sec">Released</div>` + b.released.map(r=>rowHtml(r,'rel')).join(''); }
+  if(b.waiting.length){ inner += `<div class="sec">Within grace — awaiting secure</div>` + b.waiting.map(r=>rowHtml(r,'wait')).join(''); }
+  if(b.kept.length){ inner += `<div class="sec">Secured — protected</div>` + b.kept.map(r=>rowHtml(r,'keep')).join(''); }
+  if(!inner) inner = `<div class="empty">No open unpaid holds at this branch.</div>`;
+  const skip = b.skipped.length ? `<div class="skiprow">${b.skipped.length} existing/walk-in booking(s) out of scope — left untouched.</div>` : '';
+  return `<div class="bcard">
+    <div class="bhead"><span class="bn">${esc(b.name)}</span>
+      <span class="meta">${b.openHolds} open · ${c.candidates+c.released} to release · ${c.waiting} within grace · ${c.kept} secured</span></div>
+    <div class="rows">${inner}${skip}</div>
+  </div>`;
+}
+
+async function load(){
+  const err = document.getElementById('err'); err.style.display='none';
+  try{
+    const res = await fetch('/api/holds/sweep'); const d = await res.json();
+    const t = d.totals||{};
+    document.getElementById('t-open').textContent = t.openHolds ?? 0;
+    document.getElementById('t-wait').textContent = t.waiting ?? 0;
+    document.getElementById('t-rel').textContent = (t.candidates||0)+(t.released||0);
+    document.getElementById('t-rel-l').textContent = d.dryRun ? 'Would release' : 'Released';
+    document.getElementById('t-keep').textContent = t.kept ?? 0;
+    document.getElementById('t-skip').textContent = t.skipped ?? 0;
+    const m = document.getElementById('mode'); m.style.display='flex';
+    if(d.dryRun){ m.className='mode dry'; m.innerHTML = `Report-only mode — showing what would be released; nothing is cancelled. <span class="pill">scope: ${esc(d.scope)}</span> <span class="pill">grace: ${d.graceMinutes} min</span>`; }
+    else { m.className='mode live'; m.innerHTML = `LIVE — unsecured slots are being released automatically. <span class="pill">scope: ${esc(d.scope)}</span> <span class="pill">grace: ${d.graceMinutes} min</span>`; }
+    document.getElementById('branches').innerHTML = (d.branches||[]).map(branchHtml).join('');
+  }catch(e){ err.style.display='block'; err.textContent = 'Could not load holds: '+e.message; }
+}
+load();
+</script>
+</body>
+</html>
