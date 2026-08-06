@@ -137,6 +137,16 @@ export const CONFIG = {
   // SMS via Hubtel (reuses the Hubtel API key; sender ID must be registered).
   notifySmsEnabled: bool(process.env.NOTIFY_SMS_ENABLED, false),
   hubtelSmsSender: process.env.HUBTEL_SMS_SENDER || 'Niobe',
+  // Auto-send the deposit link + a pre-release reminder from the sweep. OFF by
+  // default so nothing is sent to real clients during the report-only period; it
+  // is turned on together with the live go-live.
+  notifyAutosendEnabled: bool(process.env.NOTIFY_AUTOSEND_ENABLED, false),
+  // Only auto-notify bookings created within this many minutes, so switching
+  // auto-send on never back-blasts old existing bookings — just genuinely new ones.
+  notifyFreshMinutes: Number(process.env.NOTIFY_FRESH_MINUTES || 180),
+  // Send the "secure it soon" reminder when a within-grace hold is this many
+  // minutes from its release deadline.
+  reminderLeadMinutes: Number(process.env.REMINDER_LEAD_MINUTES || 15),
   // Public base URL of this service (used to build Paystack callback/return links).
   publicUrl: process.env.PUBLIC_URL || `http://localhost:${Number(process.env.PORT || 3000)}`,
 };

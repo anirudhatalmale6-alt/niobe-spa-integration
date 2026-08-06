@@ -5,6 +5,7 @@ import { BRANCHES, CONFIG, branchById } from './config.js';
 import { ssPost } from './simplespa.js';
 import { isCreditClient } from './credit.js';
 import { isReleasable, releaseDeadline, refreshDerivedHours } from './hours.js';
+import { sendDepositEmail, sendDepositSMS } from './notify.js';
 
 // ---------------------------------------------------------------------------
 // Secure-or-release engine — the no-show fix.
@@ -228,6 +229,60 @@ async function doRelease(branch, appt, deadline) {
   }
 }
 
+// --- Deposit-link notifications (deposit link on booking + pre-release reminder) ---
+// Dedup across sweeps (in-memory; the freshness window bounds any re-send after a
+// restart). These are separate from the hold registry so notifying never changes
+// a booking's release grace (registering would flip it to the tracked timer).
+const notifiedIds = new Set();
+const remindedIds = new Set();
+
+// Pure decision: given a hold, its assessment, and what we've already sent, what
+// should we send now? Returns { first, reminder } booleans. Exported for testing.
+export function notifyPlan(appt, a, now, { fresh, notified, reminded, reminderLeadMs }) {
+  const id = appt.appointment_id;
+  const hasContact = !!(appt.client?.email || appt.client?.mobile);
+  if (!hasContact) return { first: false, reminder: false };
+  // First deposit-link send: a fresh, still-open, unsecured hold we've not emailed.
+  const first = fresh && !notified.has(id) && (a.action === 'wait' || a.action === 'release');
+  // Reminder: within grace, deadline approaching, not yet reminded.
+  const reminder = a.action === 'wait' && !!a.deadline && !reminded.has(id)
+    && (a.deadline.getTime() - now.getTime()) <= reminderLeadMs;
+  return { first, reminder };
+}
+
+const fmtWhen = (s) => String(s || '').replace('T', ' ').slice(0, 16);
+const fmtDeadline = (d) => (d ? d.toISOString().replace('T', ' ').slice(0, 16) + ' GMT' : '');
+
+async function maybeNotify(branch, appt, a, now) {
+  if (!CONFIG.notifyAutosendEnabled) return;
+  const createdAt = new Date(String(appt.created_at || appt.start).replace(' ', 'T') + 'Z');
+  const fresh = (now.getTime() - createdAt.getTime()) / 60000 <= CONFIG.notifyFreshMinutes;
+  const plan = notifyPlan(appt, a, now, {
+    fresh, notified: notifiedIds, reminded: remindedIds,
+    reminderLeadMs: CONFIG.reminderLeadMinutes * 60000,
+  });
+  if (!plan.first && !plan.reminder) return;
+
+  const phone = appt.client?.mobile || '';
+  const email = appt.client?.email || '';
+  const payUrl = `${CONFIG.publicUrl}/pay?b=${branch.id}&ph=${encodeURIComponent(phone)}`;
+  const common = { branchName: branch.name, payUrl, deadlineText: fmtDeadline(a.deadline) };
+  const id = appt.appointment_id;
+
+  if (plan.first) {
+    notifiedIds.add(id);
+    if (email) await sendDepositEmail({ to: email, name: appt.client?.first_name, service: appt.service?.service_name, datetime: fmtWhen(appt.start), ...common });
+    if (phone) await sendDepositSMS({ to: phone, ...common });
+    auditRelease({ at: new Date().toISOString(), action: 'notify_deposit_link', branchId: branch.id, appointment_id: id, email: !!email, sms: !!phone });
+  }
+  if (plan.reminder) {
+    remindedIds.add(id);
+    if (email) await sendDepositEmail({ to: email, name: appt.client?.first_name, service: appt.service?.service_name, datetime: fmtWhen(appt.start), ...common });
+    if (phone) await sendDepositSMS({ to: phone, ...common });
+    auditRelease({ at: new Date().toISOString(), action: 'notify_reminder', branchId: branch.id, appointment_id: id, email: !!email, sms: !!phone });
+  }
+}
+
 // Sweep one branch: assess every open hold, release those due (respecting
 // DRY_RUN + scope), and return a summary of what happened / would happen.
 export async function sweepBranch(branch, now = new Date()) {
@@ -238,6 +293,8 @@ export async function sweepBranch(branch, now = new Date()) {
   const released = [], candidates = [], kept = [], waiting = [], skipped = [];
   for (const appt of open) {
     const a = assess(branch, appt, now);
+    // Fire the deposit-link / reminder notifications (no-op unless auto-send is on).
+    try { await maybeNotify(branch, appt, a, now); } catch { /* notifications never break the sweep */ }
     const row = {
       appointment_id: appt.appointment_id, start: appt.start,
       client: `${appt.client?.first_name || ''} ${appt.client?.last_name || ''}`.trim(),
