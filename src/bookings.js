@@ -5,6 +5,7 @@ import { convertFromGHS } from './fx.js';
 import { CONFIG, branchById } from './config.js';
 import { ssPost } from './simplespa.js';
 import { isCreditClient } from './credit.js';
+import { registerHold, markSecured } from './holds.js';
 import { appendFileSync, mkdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -128,6 +129,11 @@ async function toBooking(branch, appt) {
     giftCardOrCredit: creditExempt,
   };
   bookings.set(b.id, b);
+  // This appointment has now been seen by our booking funnel → track it so the
+  // release engine can hold/release it (walk-ins never seen here are left alone
+  // in the default 'tracked' scope). Credit/gift-card routes need staff to
+  // authorise → mark staffAuth so their deadline rolls into business hours.
+  registerHold(b.appointment_id, { branchId: b.branchId, staffAuth: !!creditExempt });
   return b;
 }
 
@@ -236,6 +242,9 @@ export async function finalizeDeposit(reference) {
     b.status = confirm.confirmed ? 'confirmed' : 'paid_pending_confirm';
     b.paidAmount = pay.amount;
     b.paymentReference = reference;
+    // Payment cleared → mark the hold secured so the release sweep never touches
+    // it, even if the SimpleSpa confirm write is momentarily unavailable.
+    markSecured(b.appointment_id, `deposit_ref:${reference}`);
   }
   recordPaidDeposit({
     reference, branchId: b?.branchId, appointment_id: b?.appointment_id,
@@ -257,6 +266,11 @@ export async function claimAccountCredit(bookingId) {
   if (!b) return null;
   b.status = 'credit_claim_pending';
   b.creditClaim = { at: new Date().toISOString() };
+  // A self-claimed credit still needs staff to verify the account truly holds
+  // credit before it counts as secured — so we do NOT mark it secured here.
+  // Flag it staffAuth so its release deadline rolls into business hours, giving
+  // front desk a fair window to verify before the slot would be released.
+  registerHold(b.appointment_id, { branchId: b.branchId, staffAuth: true, reason: 'credit_claim_pending' });
   recordCreditClaim({
     bookingId: b.id, appointment_id: b.appointment_id, branchId: b.branchId, branchName: b.branchName,
     customer: b.customer?.name, phone: b.customer?.phone, service: b.service, datetime: b.datetime,

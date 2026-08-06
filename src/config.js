@@ -77,6 +77,27 @@ export const CONFIG = {
   currency: process.env.CURRENCY || 'GHS',
   // Deposit rule: minimum 50% or pay in full (same across all services/branches).
   depositMinPercent: Number(process.env.DEPOSIT_MIN_PERCENT || 50),
+
+  // --- Secure-or-release (no-show) engine (holds.js / hours.js) ---
+  // Master switch for the periodic release sweep. Off by default so the engine
+  // never runs until Niobe explicitly arms it.
+  releaseEnabled: bool(process.env.RELEASE_ENABLED, false),
+  // DRY_RUN (default ON): report what WOULD be released, write nothing to
+  // SimpleSpa. Set RELEASE_DRY_RUN=false only after Niobe has watched the
+  // dry-run candidates on their live data and signed off.
+  releaseDryRun: bool(process.env.RELEASE_DRY_RUN, true),
+  // Which unsecured holds are in scope for auto-release:
+  //   'tracked' (default) — only holds our booking funnel has seen; a walk-in
+  //                         or phone booking created straight in SimpleSpa is
+  //                         never touched.
+  //   'all'     — additionally release ANY unsecured New/Rebooked past deadline
+  //               (fuller loophole closure; pair with the front-desk policy of
+  //               taking payment / confirming their own bookings).
+  releaseScope: (process.env.RELEASE_SCOPE || 'tracked').toLowerCase(),
+  // Grace window (minutes) before an unsecured hold is released.
+  releaseGraceMinutes: Number(process.env.RELEASE_GRACE_MINUTES || 60),
+  // How often the sweep runs (ms).
+  releaseSweepMs: Number(process.env.RELEASE_SWEEP_MS || 5 * 60 * 1000),
   // Public base URL of this service (used to build Paystack callback/return links).
   publicUrl: process.env.PUBLIC_URL || `http://localhost:${Number(process.env.PORT || 3000)}`,
 };

@@ -7,6 +7,7 @@ import { getConsolidatedStock } from './stock.js';
 import { getUnifiedAvailability, listServiceNames } from './availability.js';
 import { getBooking, bookingDeposit, startDeposit, finalizeDeposit, listBookings, getPayment, lookupBookings, claimAccountCredit } from './bookings.js';
 import { startPurchase, finalizePurchase, getPurchase } from './giftcards.js';
+import { sweepAll, listHolds, startSweepLoop, secureAndConfirm } from './holds.js';
 import { getCatalog } from './giftup.js';
 import { verifyWebhookSignature, parseWebhookEvent, displayName as gatewayName } from './gateway.js';
 import { renderPayPage, renderCheckout, renderSuccess, renderPhoneEntry, renderChooser, renderNoMatch, renderCreditClaim, renderGiftCardPage, renderGiftCheckout, renderGiftCardSuccess, renderGiftCardPending } from './views.js';
@@ -48,6 +49,18 @@ const server = createServer(async (req, res) => {
         branchId: q.get('branch') || undefined,
       });
       return json(res, 200, data);
+    }
+
+    // --- Secure-or-release (no-show) engine ---
+    // Read-only sweep report: what's within grace, what would be / was released.
+    // Safe to call any time — honours DRY_RUN, only writes when armed live.
+    if (req.method === 'GET' && p === '/api/holds/sweep') return json(res, 200, await sweepAll());
+    if (req.method === 'GET' && p === '/api/holds') return json(res, 200, listHolds());
+    // Staff route: verify a non-cash secure (account credit / existing gift card /
+    // prepaid package / bank transfer) and confirm the appointment in one step.
+    if (req.method === 'POST' && p === '/api/holds/secure') {
+      const body = parseBody(await readBody(req), req.headers['content-type']);
+      return json(res, 200, await secureAndConfirm(body.appointment_id, { branchId: body.branchId, reason: body.reason }));
     }
 
     // --- Deposit flow (customer-facing) ---
@@ -163,4 +176,6 @@ const server = createServer(async (req, res) => {
 
 server.listen(CONFIG.port, () => {
   console.log(`Niobe integration on http://localhost:${CONFIG.port}  (stock demo=${CONFIG.demoMode}, gateway=${gatewayName}, payment demo=${CONFIG.paymentDemo})`);
+  // Start the secure-or-release sweep (no-op unless RELEASE_ENABLED=true).
+  startSweepLoop();
 });
