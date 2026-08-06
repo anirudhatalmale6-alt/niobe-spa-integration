@@ -2,7 +2,7 @@ import { depositOptions, isAmountAllowed, makeReference, serviceRequiresFull } f
 import { initializeTransaction, verifyTransaction } from './gateway.js';
 import { confirmAppointment } from './confirm.js';
 import { convertFromGHS } from './fx.js';
-import { CONFIG, branchById } from './config.js';
+import { BRANCHES, CONFIG, branchById } from './config.js';
 import { ssPost } from './simplespa.js';
 import { isCreditClient } from './credit.js';
 import { registerHold, markSecured } from './holds.js';
@@ -69,17 +69,66 @@ if (CONFIG.demoMode) seed();
 
 // --- Live SimpleSpa reads -------------------------------------------------
 
-// Per-branch service price map (appointments.php carries no price), cached briefly.
-const serviceCache = new Map(); // branchId -> { at, map: Map(service_id -> { name, price }) }
+// Per-branch service price maps (appointments.php carries no price), cached briefly.
+// Keyed BOTH by service_id and by normalised name, because a live appointment can
+// reference a service_id that is no longer in the branch's current services.php
+// (renamed/re-created service) even though the same service name is still priced —
+// this is what caused C18 bookings to show "no unpaid appointment" (price fell to
+// 0 and the booking was dropped). We resolve price by id → branch name → global name.
+const serviceCache = new Map(); // branchId -> { at, idMap, nameMap }
 const SERVICE_TTL_MS = 10 * 60 * 1000;
-async function servicePriceMap(branch) {
+const normName = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+async function servicePriceMaps(branch) {
   const hit = serviceCache.get(branch.id);
-  if (hit && Date.now() - hit.at < SERVICE_TTL_MS) return hit.map;
+  if (hit && Date.now() - hit.at < SERVICE_TTL_MS) return hit;
   const res = await ssPost(branch, 'services.php', { per_page: 1000 });
   const arr = res.services || Object.values(res).find(Array.isArray) || [];
-  const map = new Map(arr.map((s) => [String(s.service_id), { name: s.name, price: Number(s.price) || 0 }]));
-  serviceCache.set(branch.id, { at: Date.now(), map });
+  const idMap = new Map();
+  const nameMap = new Map();
+  for (const s of arr) {
+    const price = Number(s.price) || 0;
+    idMap.set(String(s.service_id), { name: s.name, price });
+    const k = normName(s.name);
+    // keep the highest priced entry for a duplicated name within a branch
+    if (price > 0 && (!nameMap.has(k) || price > nameMap.get(k))) nameMap.set(k, price);
+  }
+  const entry = { at: Date.now(), idMap, nameMap };
+  serviceCache.set(branch.id, entry);
+  return entry;
+}
+
+// Global normalised-name → price fallback, for services a booking references that
+// aren't in that branch's own catalog at all. Built across every branch (East
+// Legon first as the fullest, canonical catalog), keeping the first non-zero
+// price per name. Cached with the same TTL.
+let globalNameCache = { at: 0, map: new Map() };
+async function globalNamePrice() {
+  if (Date.now() - globalNameCache.at < SERVICE_TTL_MS && globalNameCache.map.size) return globalNameCache.map;
+  const ordered = [...BRANCHES].sort((a, b) => (a.id === 'east_legon' ? -1 : b.id === 'east_legon' ? 1 : 0));
+  const map = new Map();
+  for (const b of ordered) {
+    try {
+      const { nameMap } = await servicePriceMaps(b);
+      for (const [k, price] of nameMap) if (!map.has(k)) map.set(k, price);
+    } catch { /* skip a branch we can't read */ }
+  }
+  globalNameCache = { at: Date.now(), map };
   return map;
+}
+
+// Resolve a live appointment's price: exact service_id → same-branch name →
+// global name. Returns { name, price, source }.
+async function resolveServicePrice(branch, appt) {
+  const { idMap, nameMap } = await servicePriceMaps(branch);
+  const byId = idMap.get(String(appt.service?.service_id));
+  const apptName = appt.service?.service_name || byId?.name || '';
+  if (byId && byId.price > 0) return { name: byId.name, price: byId.price, source: 'id' };
+  const k = normName(apptName);
+  if (k && nameMap.has(k)) return { name: apptName, price: nameMap.get(k), source: 'branch_name' };
+  const g = await globalNamePrice();
+  if (k && g.has(k)) return { name: apptName, price: g.get(k), source: 'global_name' };
+  return { name: apptName || byId?.name || 'Your service', price: byId?.price || 0, source: 'none' };
 }
 
 const ymd = (d) => d.toISOString().slice(0, 10);
@@ -103,8 +152,7 @@ async function fetchUpcomingAppointments(branch) {
 }
 
 async function toBooking(branch, appt) {
-  const prices = await servicePriceMap(branch);
-  const svc = prices.get(String(appt.service?.service_id));
+  const svc = await resolveServicePrice(branch, appt);
   const name = `${appt.client?.first_name || ''} ${appt.client?.last_name || ''}`.trim() || 'Guest';
   const phone = appt.client?.mobile || '';
   // SimpleSpa's appointment/client API exposes no credit or gift-card flag, so we rely on a
@@ -116,8 +164,9 @@ async function toBooking(branch, appt) {
     appointment_id: appt.appointment_id,
     branchId: branch.id,
     branchName: branch.name,
-    service: appt.service?.service_name || svc?.name || 'Your service',
-    price: svc ? svc.price : 0,
+    service: appt.service?.service_name || svc.name || 'Your service',
+    price: svc.price,
+    priceSource: svc.source,
     therapist: appt.staff?.staff_name || '',
     datetime: appt.start,
     customer: { name, email: appt.client?.email || '', phone },
