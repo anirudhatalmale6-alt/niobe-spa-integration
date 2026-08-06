@@ -4,7 +4,7 @@ import { dirname, join } from 'path';
 import { BRANCHES, CONFIG, branchById } from './config.js';
 import { ssPost } from './simplespa.js';
 import { isCreditClient } from './credit.js';
-import { isReleasable, releaseDeadline } from './hours.js';
+import { isReleasable, releaseDeadline, refreshDerivedHours } from './hours.js';
 
 // ---------------------------------------------------------------------------
 // Secure-or-release engine — the no-show fix.
@@ -272,6 +272,9 @@ function demoSweep(now) {
 // Sweep every branch. Runs branches in parallel; each is independent.
 export async function sweepAll(now = new Date()) {
   if (CONFIG.demoMode) return demoSweep(now);
+  // Keep branch opening hours in step with SimpleSpa staff rosters before we
+  // compute any release deadlines (TTL-guarded, best-effort).
+  await refreshDerivedHours(BRANCHES, ssPost, { now: now.getTime() });
   const branches = await Promise.all(BRANCHES.map((b) => sweepBranch(b, now)));
   const totals = branches.reduce((t, b) => {
     if (!b.ok) { t.errors++; return t; }

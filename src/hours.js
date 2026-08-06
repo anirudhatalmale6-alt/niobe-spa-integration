@@ -53,8 +53,22 @@ function parseHoursEnv() {
 }
 const HOURS_ENV = parseHoursEnv();
 
-// Resolve the weekly hours table for a branch: branch override → env → default.
+// Per-branch weekly hours DERIVED FROM SIMPLESPA staff schedules — the single
+// source of truth Niobe asked for: a branch is "open" on a day if any therapist
+// is rostered, so opening a hotel branch on a Sunday in SimpleSpa (by scheduling
+// staff) automatically opens it here too, with no separate toggle to keep in
+// sync. Populated by refreshDerivedHours(); falls back to static config when a
+// branch has no rostered hours or the fetch fails, so the engine never breaks.
+const derived = new Map(); // branchId -> weekly table {0..6: {open,close}|null}
+export function setDerivedHours(branchId, table) {
+  if (table) derived.set(branchId, table); else derived.delete(branchId);
+}
+export function getDerivedHours(branchId) { return derived.get(branchId); }
+
+// Resolve the weekly hours table for a branch:
+// SimpleSpa-derived → branch override → env → default.
 function hoursTable(branch) {
+  if (branch && derived.has(branch.id)) return derived.get(branch.id);
   if (branch && branch.hours) return branch.hours;
   if (HOURS_ENV) {
     if (branch && HOURS_ENV[branch.id]) return HOURS_ENV[branch.id];
@@ -159,4 +173,52 @@ export function releaseDeadline(createdAt, branch, opts = {}) {
 // as of `now`?
 export function isReleasable(createdAt, branch, now, opts = {}) {
   return now.getTime() >= releaseDeadline(createdAt, branch, opts).getTime();
+}
+
+// --- SimpleSpa-derived hours (single source of truth) ---------------------
+const pad2 = (n) => String(n).padStart(2, '0');
+const minToHm = (m) => `${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`;
+
+// Build a branch's weekly opening table from its rostered staff hours. SimpleSpa
+// staff `hours[].day` uses 0 = Monday … 6 = Sunday (confirmed against live data);
+// we map that to JS weekday (0 = Sunday … 6 = Saturday). A day's window is the
+// widest span any therapist is on shift: earliest start → latest end. A day with
+// no rostered staff is null (closed) — which is exactly how a hotel branch's
+// Sunday reads unless staff are scheduled.
+async function hoursFromStaff(branch, ssPost) {
+  const res = await ssPost(branch, 'staff.php', { per_page: 1000 });
+  const staff = res.staff || Object.values(res).find(Array.isArray) || [];
+  const acc = {}; // jsDay -> {open,close} in minutes
+  for (const st of staff) {
+    for (const h of st.hours || []) {
+      const jsDay = (Number(h.day) + 1) % 7; // Mon(0)->1 … Sun(6)->0
+      const s = hmToMin(h.startTime), e = hmToMin(h.endTime);
+      if (!(e > s)) continue;
+      const cur = acc[jsDay];
+      acc[jsDay] = cur ? { open: Math.min(cur.open, s), close: Math.max(cur.close, e) } : { open: s, close: e };
+    }
+  }
+  const table = {};
+  let openDays = 0;
+  for (let d = 0; d < 7; d++) {
+    if (acc[d]) { table[d] = { open: minToHm(acc[d].open), close: minToHm(acc[d].close) }; openDays++; }
+    else table[d] = null;
+  }
+  return { table, openDays };
+}
+
+// Refresh the derived-hours cache for every branch (TTL-guarded). Best-effort:
+// a branch we can't read, or one with no rostered hours at all, keeps its static
+// fallback so a transient API blip never marks a branch closed all week.
+let lastRefresh = 0;
+export async function refreshDerivedHours(branches, ssPost, { ttlMs = CONFIG.derivedHoursTtlMs, now = Date.now() } = {}) {
+  if (CONFIG.hoursSource !== 'simplespa') return;
+  if (now - lastRefresh < ttlMs) return;
+  lastRefresh = now;
+  await Promise.all(branches.map(async (b) => {
+    try {
+      const { table, openDays } = await hoursFromStaff(b, ssPost);
+      if (openDays > 0) setDerivedHours(b.id, table);
+    } catch { /* keep static fallback on error */ }
+  }));
 }

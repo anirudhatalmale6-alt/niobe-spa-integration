@@ -118,6 +118,14 @@ export const CONFIG = {
   releaseUntrackedGraceMinutes: Number(process.env.RELEASE_UNTRACKED_GRACE_MINUTES || 540),
   // How often the sweep runs (ms).
   releaseSweepMs: Number(process.env.RELEASE_SWEEP_MS || 5 * 60 * 1000),
+  // Where branch opening hours come from for the release-deadline maths:
+  //   'simplespa' (default) — derive from each branch's rostered staff schedule,
+  //                so a hotel branch opened on a Sunday in SimpleSpa opens here
+  //                automatically (no separate toggle). Falls back to static hours
+  //                if a branch has no roster / the read fails.
+  //   'config'   — use the static per-branch hours only.
+  hoursSource: (process.env.HOURS_SOURCE || 'simplespa').toLowerCase(),
+  derivedHoursTtlMs: Number(process.env.DERIVED_HOURS_TTL_MS || 30 * 60 * 1000),
   // Public base URL of this service (used to build Paystack callback/return links).
   publicUrl: process.env.PUBLIC_URL || `http://localhost:${Number(process.env.PORT || 3000)}`,
 };
