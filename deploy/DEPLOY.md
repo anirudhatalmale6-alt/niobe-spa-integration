@@ -55,9 +55,24 @@ HUBTEL_MERCHANT_ACCOUNT=<hubtel-collection-account-no>   # note: no leading zero
 # expressPay (backup) — requires this server's IP whitelisted in the expressPay dashboard
 PAYMENT_GATEWAY_BACKUP=expresspay
 EXPRESSPAY_MERCHANT_ID=... EXPRESSPAY_API_KEY=... EXPRESSPAY_BASE=https://expresspaygh.com/api
+
+# No-show engine (secure-or-release). Deploy in REPORT-ONLY first: it runs the
+# sweep and shows candidates on /holds.html but writes NOTHING to SimpleSpa until
+# RELEASE_DRY_RUN is flipped to false after the client signs off.
+RELEASE_ENABLED=true
+RELEASE_DRY_RUN=true
+RELEASE_SCOPE=all
+RELEASE_GRACE_MINUTES=60
+RELEASE_UNTRACKED_GRACE_MINUTES=540
+HOTEL_SUNDAY_OPEN=false
+NOTIFY_EMAIL=paidforbooking@niobebeauty.com
 ```
 
 Then: `systemctl restart niobe-pay`
+
+The no-show holds dashboard is at `https://pay.niobebeauty.com/holds.html`. While
+`RELEASE_DRY_RUN=true` it is a read-only report; set it to `false` and restart only
+after the client has watched the report-only period and approved auto-release.
 
 ## 5. Whitelist the server IP with the gateways
 - Hubtel: whitelist this server's IP for the Transaction Status API (`api-txnstatus.hubtel.com`)
