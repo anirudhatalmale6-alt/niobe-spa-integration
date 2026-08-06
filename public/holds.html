@@ -35,7 +35,11 @@
   .bhead .bn{font-weight:600}
   .bhead .meta{font-size:12px;color:var(--muted)}
   .rows{padding:6px 0}
-  .row{display:grid;grid-template-columns:120px 1fr 150px 160px;gap:10px;padding:9px 16px;border-bottom:1px solid #f1e7db;font-size:13px;align-items:center}
+  .row{display:grid;grid-template-columns:120px 1fr 150px 200px;gap:10px;padding:9px 16px;border-bottom:1px solid #f1e7db;font-size:13px;align-items:center}
+  .act{display:flex;align-items:center;gap:8px;justify-content:flex-end}
+  .protect{font-size:12px;font-weight:600;color:#2b2320;background:#f4ead9;border:1px solid #e3cfa8;border-radius:20px;padding:4px 11px;cursor:pointer}
+  .protect:hover{background:#eaddc4}
+  .protect:disabled{opacity:.6;cursor:default}
   .row:last-child{border-bottom:none}
   .row .who{font-weight:600}
   .row .svc{color:var(--muted)}
@@ -87,15 +91,19 @@
 const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const fmt = iso => { if(!iso) return '—'; const d=new Date(iso); return isNaN(d)?esc(iso):d.toLocaleString('en-GB',{weekday:'short',hour:'2-digit',minute:'2-digit',day:'2-digit',month:'short'}); };
 
-function rowHtml(r, kind){
+function rowHtml(r, kind, branchId){
   const tag = kind==='rel' ? `<span class="tag rel">${r.result==='released'?'Released':'Would release'}</span>`
     : kind==='wait' ? `<span class="tag wait">Secure by ${fmt(r.deadline)}</span>`
     : `<span class="tag done">${esc(r.reason||'Secured')}</span>`;
+  // Front desk can protect a still-open booking (release candidates + within-grace).
+  const canProtect = (kind==='rel' && r.result!=='released') || kind==='wait';
+  const btn = canProtect
+    ? `<button class="protect" onclick="protect('${esc(r.appointment_id)}','${esc(branchId)}',this)">Protect</button>` : '';
   return `<div class="row">
     <div>${fmt(r.start)}</div>
     <div><div class="who">${esc(r.client||'(no name)')}</div><div class="svc">${esc(r.service||'')}</div></div>
     <div>${esc(r.phone||'')}</div>
-    <div>${tag}</div>
+    <div class="act">${tag}${btn}</div>
   </div>`;
 }
 
@@ -103,10 +111,10 @@ function branchHtml(b){
   if(!b.ok) return `<div class="bcard"><div class="bhead"><span class="bn">${esc(b.name)}</span><span class="meta" style="color:var(--out)">read error: ${esc(b.error||'')}</span></div></div>`;
   const c = b.counts;
   let inner = '';
-  if(b.candidates.length){ inner += `<div class="sec">To release — unsecured past deadline</div>` + b.candidates.map(r=>rowHtml(r,'rel')).join(''); }
-  if(b.released.length){ inner += `<div class="sec">Released</div>` + b.released.map(r=>rowHtml(r,'rel')).join(''); }
-  if(b.waiting.length){ inner += `<div class="sec">Within grace — awaiting secure</div>` + b.waiting.map(r=>rowHtml(r,'wait')).join(''); }
-  if(b.kept.length){ inner += `<div class="sec">Secured — protected</div>` + b.kept.map(r=>rowHtml(r,'keep')).join(''); }
+  if(b.candidates.length){ inner += `<div class="sec">To release — unsecured past deadline</div>` + b.candidates.map(r=>rowHtml(r,'rel',b.branchId)).join(''); }
+  if(b.released.length){ inner += `<div class="sec">Released</div>` + b.released.map(r=>rowHtml(r,'rel',b.branchId)).join(''); }
+  if(b.waiting.length){ inner += `<div class="sec">Within grace — awaiting secure</div>` + b.waiting.map(r=>rowHtml(r,'wait',b.branchId)).join(''); }
+  if(b.kept.length){ inner += `<div class="sec">Secured — protected</div>` + b.kept.map(r=>rowHtml(r,'keep',b.branchId)).join(''); }
   if(!inner) inner = `<div class="empty">No open unpaid holds at this branch.</div>`;
   const skip = b.skipped.length ? `<div class="skiprow">${b.skipped.length} existing/walk-in booking(s) out of scope — left untouched.</div>` : '';
   return `<div class="bcard">
@@ -114,6 +122,16 @@ function branchHtml(b){
       <span class="meta">${b.openHolds} open · ${c.candidates+c.released} to release · ${c.waiting} within grace · ${c.kept} secured</span></div>
     <div class="rows">${inner}${skip}</div>
   </div>`;
+}
+
+async function protect(id, branchId, btn){
+  btn.disabled = true; btn.textContent = 'Protecting…';
+  try{
+    const r = await fetch('/api/holds/secure', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ appointment_id:id, branchId, reason:'front_desk', by:'front_desk' }) });
+    if(r.ok){ btn.textContent = 'Protected ✓'; setTimeout(load, 700); }
+    else { btn.textContent = 'Failed'; btn.disabled = false; }
+  }catch(e){ btn.textContent = 'Failed'; btn.disabled = false; }
 }
 
 async function load(){

@@ -60,7 +60,7 @@ const server = createServer(async (req, res) => {
     // prepaid package / bank transfer) and confirm the appointment in one step.
     if (req.method === 'POST' && p === '/api/holds/secure') {
       const body = parseBody(await readBody(req), req.headers['content-type']);
-      return json(res, 200, await secureAndConfirm(body.appointment_id, { branchId: body.branchId, reason: body.reason }));
+      return json(res, 200, await secureAndConfirm(body.appointment_id, { branchId: body.branchId, reason: body.reason, by: body.by }));
     }
 
     // --- Deposit flow (customer-facing) ---

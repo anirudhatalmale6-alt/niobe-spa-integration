@@ -170,6 +170,16 @@ function assess(branch, appt, now) {
   return { action: 'release', reason: 'unsecured_past_deadline', deadline, tracked };
 }
 
+// Re-read one appointment's CURRENT status from SimpleSpa (narrow single-day
+// query) — used as a last-moment race check right before we cancel.
+async function currentStatus(branch, appt) {
+  const date = String(appt.start).split(' ')[0];
+  const res = await ssPost(branch, 'appointments.php', { start: date, end: date, per_page: 1000 });
+  const arr = res.appointments || Object.values(res).find(Array.isArray) || [];
+  const found = arr.find((a) => a.appointment_id === appt.appointment_id);
+  return found ? Number(found.status) : null;
+}
+
 // Actually flip an appointment to Cancelled(15) in SimpleSpa (unless DRY_RUN).
 async function doRelease(branch, appt, deadline) {
   const reason = `auto-release: deposit not secured by ${deadline.toISOString()}`;
@@ -185,7 +195,24 @@ async function doRelease(branch, appt, deadline) {
     auditRelease(entry);
     return { released: false, dryRun: true, entry };
   }
+  // FINAL RACE GUARD — the sweep read a snapshot a moment ago; a payment or a
+  // staff confirmation in the seconds since must win over the release:
+  //  (1) in-process: a cleared deposit calls markSecured() synchronously, and a
+  //      credit number may have just been allow-listed → securedByRule.
+  //  (2) out-of-band: staff may have moved the booking on in SimpleSpa → re-read
+  //      the live status and only cancel if it is STILL an open hold (New/Rebooked).
+  // Payment is authoritative regardless (its confirm writes status 20, which would
+  // override a stray cancel), but this avoids making the wrong write in the first place.
+  if (securedByRule(appt).secured) {
+    entry.result = 'skipped_secured_at_write'; auditRelease(entry);
+    return { released: false, entry };
+  }
   try {
+    const live = await currentStatus(branch, appt);
+    if (live !== null && !HOLD_STATUS.has(live)) {
+      entry.result = `skipped_status_${live}`; auditRelease(entry);
+      return { released: false, entry };
+    }
     await ssPost(branch, 'write/appointments-status.php', {
       appointment_id: appt.appointment_id, status: STATUS_CANCELLED, reason,
     });
@@ -291,21 +318,32 @@ export async function sweepAll(now = new Date()) {
   };
 }
 
-// Secure a hold via a staff-authorised route (credit / gift card / prepaid /
-// bank transfer) AND confirm the appointment in SimpleSpa in one step. Used when
-// front desk verifies a non-cash secure. Confirms the whole group together.
-export async function secureAndConfirm(appointmentId, { branchId, reason = 'staff_secured' } = {}) {
+// Front-desk manual PROTECT / secure. Used when staff know a payment is pending
+// or they've spoken to the client — it shields the booking from auto-release and,
+// when live, confirms it in SimpleSpa. Works for any booking (even one our funnel
+// never saw) by registering it first, so an existing/untracked hold can be
+// protected too. Protects the whole group together. Logged for the audit trail.
+export async function secureAndConfirm(appointmentId, { branchId, reason = 'staff_protected', by = 'front_desk' } = {}) {
+  // Register-then-secure so untracked/existing bookings can be protected as well.
+  const bId = branchId || holds.get(appointmentId)?.branchId;
+  registerHold(appointmentId, { branchId: bId, reason });
   markSecured(appointmentId, reason);
-  const branch = branchById(branchId) || branchById(holds.get(appointmentId)?.branchId);
-  if (!branch) return { confirmed: false, error: 'unknown_branch' };
-  if (CONFIG.releaseDryRun) return { confirmed: false, dryRun: true, appointment_id: appointmentId };
+  auditRelease({
+    at: new Date().toISOString(), action: 'manual_protect', by, reason,
+    branchId: bId, appointment_id: appointmentId, dryRun: CONFIG.releaseDryRun,
+  });
+  const branch = branchById(bId);
+  if (!branch) return { protected: true, confirmed: false, error: 'unknown_branch', appointment_id: appointmentId };
+  // In report-only we protect in-memory but don't write to SimpleSpa yet; once
+  // live, a manual protect also confirms the booking so it survives a restart.
+  if (CONFIG.releaseDryRun) return { protected: true, confirmed: false, dryRun: true, appointment_id: appointmentId };
   try {
     await ssPost(branch, 'write/appointments-status.php', {
-      appointment_id: appointmentId, status: STATUS_CONFIRMED, reason: `secured:${reason}`,
+      appointment_id: appointmentId, status: STATUS_CONFIRMED, reason: `protected:${reason}`,
     });
-    return { confirmed: true, appointment_id: appointmentId };
+    return { protected: true, confirmed: true, appointment_id: appointmentId };
   } catch (err) {
-    return { confirmed: false, error: err.message, appointment_id: appointmentId };
+    return { protected: true, confirmed: false, error: err.message, appointment_id: appointmentId };
   }
 }
 
