@@ -134,6 +134,9 @@ export const CONFIG = {
   graphTenantId: process.env.GRAPH_TENANT_ID || '',
   graphClientId: process.env.GRAPH_CLIENT_ID || '',
   graphClientSecret: process.env.GRAPH_CLIENT_SECRET || '',
+  // SMS via Hubtel (reuses the Hubtel API key; sender ID must be registered).
+  notifySmsEnabled: bool(process.env.NOTIFY_SMS_ENABLED, false),
+  hubtelSmsSender: process.env.HUBTEL_SMS_SENDER || 'Niobe',
   // Public base URL of this service (used to build Paystack callback/return links).
   publicUrl: process.env.PUBLIC_URL || `http://localhost:${Number(process.env.PORT || 3000)}`,
 };
