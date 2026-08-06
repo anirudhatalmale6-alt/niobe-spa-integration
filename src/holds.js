@@ -147,13 +147,20 @@ function securedByRule(appt) {
 function assess(branch, appt, now) {
   const createdAt = new Date(String(appt.created_at || appt.start).replace(' ', 'T') + 'Z');
   const tracked = holds.has(appt.appointment_id);
-  const staffAuth = holds.get(appt.appointment_id)?.staffAuth || false;
 
   const sec = securedByRule(appt);
   if (sec.secured) return { action: 'keep', reason: sec.reason, tracked };
 
-  const deadline = releaseDeadline(createdAt, branch, { staffAuth });
-  const due = isReleasable(createdAt, branch, now, { staffAuth });
+  // Two windows. A tracked online hold (our funnel) gets the tight loophole timer
+  // (RELEASE_GRACE_MINUTES; business-minutes only for staff-authorised routes).
+  // An untracked/existing booking swept under scope='all' gets the generous
+  // "call-to-confirm, cancel-by-Monday" window in business minutes.
+  const opts = tracked
+    ? { staffAuth: holds.get(appt.appointment_id)?.staffAuth || false, graceMinutes: CONFIG.releaseGraceMinutes }
+    : { staffAuth: true, graceMinutes: CONFIG.releaseUntrackedGraceMinutes };
+
+  const deadline = releaseDeadline(createdAt, branch, opts);
+  const due = isReleasable(createdAt, branch, now, opts);
 
   // Scope guard: in 'tracked' mode we only ever release holds our funnel saw.
   const inScope = CONFIG.releaseScope === 'all' || tracked;

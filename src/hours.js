@@ -27,18 +27,18 @@ import { CONFIG } from './config.js';
 // to reason about; we do all maths in UTC.
 // ---------------------------------------------------------------------------
 
-// Default weekly opening hours, keyed by JS weekday (0 = Sunday … 6 = Saturday).
-// null = closed that day. Overridable per deployment via BUSINESS_HOURS (JSON),
-// and per branch via a branch.hours override. These are sensible salon defaults;
-// the exact per-branch hours are confirmed with Niobe before go-live.
+// Niobe's opening hours (confirmed 2026-08-06, GMT — Ghana is UTC+0), keyed by
+// JS weekday (0 = Sunday … 6 = Saturday). null = closed that day. Overridable per
+// deployment via BUSINESS_HOURS (JSON) and per branch via a branch.hours override
+// (see config.js — the Alisa Hotel and African Regent branches close on Sundays).
 const DEFAULT_HOURS = {
-  0: null,                         // Sunday — closed
-  1: { open: '09:00', close: '19:00' },
-  2: { open: '09:00', close: '19:00' },
-  3: { open: '09:00', close: '19:00' },
-  4: { open: '09:00', close: '19:00' },
-  5: { open: '09:00', close: '19:00' },
-  6: { open: '09:00', close: '18:00' }, // Saturday — shorter
+  0: { open: '12:30', close: '18:00' }, // Sunday
+  1: { open: '09:00', close: '18:00' }, // Mon–Fri
+  2: { open: '09:00', close: '18:00' },
+  3: { open: '09:00', close: '18:00' },
+  4: { open: '09:00', close: '18:00' },
+  5: { open: '09:00', close: '18:00' },
+  6: { open: '08:30', close: '18:00' }, // Saturday
 };
 
 function parseHoursEnv() {

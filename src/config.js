@@ -4,12 +4,25 @@ import './env.js';
 // The SimpleSpa API authenticates as:  Authorization: Bearer <key>
 // Read vs write is governed by the key's Mode (3 = Read + Write) in the dashboard —
 // there is no separate secret.
+const boolEarly = (v, d) => (v === undefined ? d : String(v).toLowerCase() === 'true');
+
+// Standard Niobe week (GMT): Mon–Fri 09:00–18:00, Sat 08:30–18:00, Sun 12:30–18:00.
+const STD_WEEK = {
+  0: { open: '12:30', close: '18:00' },
+  1: { open: '09:00', close: '18:00' }, 2: { open: '09:00', close: '18:00' },
+  3: { open: '09:00', close: '18:00' }, 4: { open: '09:00', close: '18:00' },
+  5: { open: '09:00', close: '18:00' }, 6: { open: '08:30', close: '18:00' },
+};
+// The Alisa Hotel and African Regent branches close on Sundays (unless opened on
+// request). Flip HOTEL_SUNDAY_OPEN=true to open them Sundays without a code change.
+const HOTEL_WEEK = { ...STD_WEEK, 0: boolEarly(process.env.HOTEL_SUNDAY_OPEN, false) ? STD_WEEK[0] : null };
+
 export const BRANCHES = [
-  { id: 'east_legon',     name: 'East Legon',          key: process.env.EAST_LEGON_KEY },
-  { id: 'cantonments',    name: 'Cantonments',         key: process.env.CANTONMENTS_KEY },
-  { id: 'african_regent', name: 'African Regent Hotel',key: process.env.AFRICAN_REGENT_KEY },
-  { id: 'hfc_c18',        name: 'HFC Community 18',     key: process.env.HFC_C18_KEY },
-  { id: 'alisa_hotel',    name: 'Alisa Hotel Tema',    key: process.env.ALISA_HOTEL_KEY },
+  { id: 'east_legon',     name: 'East Legon',          key: process.env.EAST_LEGON_KEY,     hours: STD_WEEK },
+  { id: 'cantonments',    name: 'Cantonments',         key: process.env.CANTONMENTS_KEY,    hours: STD_WEEK },
+  { id: 'african_regent', name: 'African Regent Hotel',key: process.env.AFRICAN_REGENT_KEY, hours: HOTEL_WEEK },
+  { id: 'hfc_c18',        name: 'HFC Community 18',     key: process.env.HFC_C18_KEY,        hours: STD_WEEK },
+  { id: 'alisa_hotel',    name: 'Alisa Hotel Tema',    key: process.env.ALISA_HOTEL_KEY,    hours: HOTEL_WEEK },
 ];
 
 const bool = (v, d) => (v === undefined ? d : String(v).toLowerCase() === 'true');
@@ -94,8 +107,15 @@ export const CONFIG = {
   //               (fuller loophole closure; pair with the front-desk policy of
   //               taking payment / confirming their own bookings).
   releaseScope: (process.env.RELEASE_SCOPE || 'tracked').toLowerCase(),
-  // Grace window (minutes) before an unsecured hold is released.
+  // Grace window (minutes) before an unsecured ONLINE hold (one our booking
+  // funnel created) is released — the no-show loophole timer: pay within the hour.
   releaseGraceMinutes: Number(process.env.RELEASE_GRACE_MINUTES || 60),
+  // Separate, more generous window (counted in BUSINESS minutes) for untracked /
+  // existing bookings swept under scope='all'. These are the "front desk calls to
+  // confirm; anything still unallocated by Monday is cancelled" population, so
+  // they get time across opening hours (weekends roll forward) rather than the
+  // tight online timer. Default ≈ one full business day of calls.
+  releaseUntrackedGraceMinutes: Number(process.env.RELEASE_UNTRACKED_GRACE_MINUTES || 540),
   // How often the sweep runs (ms).
   releaseSweepMs: Number(process.env.RELEASE_SWEEP_MS || 5 * 60 * 1000),
   // Public base URL of this service (used to build Paystack callback/return links).
