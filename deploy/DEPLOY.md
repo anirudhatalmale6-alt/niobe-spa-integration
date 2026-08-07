@@ -95,6 +95,23 @@ https://pay.niobebeauty.com/pay?b=<branch>&ph=[CLIENT_PHONE]
 ```
 `<branch>` = `east_legon | cantonments | african_regent | hfc_c18 | alisa_hotel`.
 
+## 8. Staff holds dashboards (auth + office hours)
+Two audiences:
+- **All-branch central monitor** — `/holds.html` + `/api/holds*`, behind nginx Basic
+  Auth (`/etc/nginx/.niobe_htpasswd`, user `niobe`). Not time-restricted. Bookings can
+  be Protected here.
+- **Per-branch front-desk view** — `/desk/<branchId>` (read-only), each behind its OWN
+  nginx login (`/etc/nginx/.niobe_desk_<branchId>`), and gated in-app to office hours
+  `DESK_OPEN_HOUR`–`DESK_CLOSE_HOUR` (Ghana=GMT). Outside hours it serves a "closed"
+  page and `/desk/<branchId>/sweep` returns 403.
+
+nginx (in the server block, BEFORE `location /`): a safety-net `location /desk/` using
+the central `.niobe_htpasswd` (so no `/desk/*` path is ever unauthenticated), then one
+`location /desk/<branchId>` per branch pointing at `.niobe_desk_<branchId>`. Create each
+htpasswd with `openssl passwd -apr1 '<pass>'` → `echo 'user:HASH' > /etc/nginx/.niobe_desk_<branchId>`.
+The dashboards drive **read-only** sweeps, so opening a view never cancels anything — the
+background loop is the sole actor.
+
 ## Updating later
 ```bash
 cd /opt/niobe-integration && git pull --ff-only && systemctl restart niobe-pay
