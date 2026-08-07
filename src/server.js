@@ -7,7 +7,7 @@ import { getConsolidatedStock } from './stock.js';
 import { getUnifiedAvailability, listServiceNames } from './availability.js';
 import { getBooking, bookingDeposit, startDeposit, finalizeDeposit, listBookings, getPayment, lookupBookings, claimAccountCredit } from './bookings.js';
 import { startPurchase, finalizePurchase, getPurchase } from './giftcards.js';
-import { sweepAll, listHolds, startSweepLoop, secureAndConfirm } from './holds.js';
+import { sweepAll, sweepBranchReport, listHolds, startSweepLoop, secureAndConfirm } from './holds.js';
 import { getCatalog } from './giftup.js';
 import { verifyWebhookSignature, parseWebhookEvent, displayName as gatewayName } from './gateway.js';
 import { renderPayPage, renderCheckout, renderSuccess, renderPhoneEntry, renderChooser, renderNoMatch, renderCreditClaim, renderGiftCardPage, renderGiftCheckout, renderGiftCardSuccess, renderGiftCardPending } from './views.js';
@@ -19,6 +19,19 @@ const MIME = { '.html':'text/html', '.js':'text/javascript', '.css':'text/css', 
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
 const html = (res, code, body) => { res.writeHead(code, { 'Content-Type': 'text/html' }); res.end(body); };
 const redirect = (res, url) => { res.writeHead(302, { Location: url }); res.end(); };
+
+// Shown when a front-desk branch view is opened outside office hours.
+const renderDeskClosed = (branch, winText) => `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>${branch.name} — Closed</title>
+<style>body{margin:0;font-family:'Segoe UI',system-ui,sans-serif;background:#f6f1ec;color:#2b2320;display:flex;min-height:100vh;align-items:center;justify-content:center}
+.card{background:#fffdfb;border:1px solid #e9ddd2;border-radius:16px;padding:34px 40px;max-width:420px;text-align:center;box-shadow:0 6px 24px rgba(43,35,32,.06)}
+.dot{width:12px;height:12px;border-radius:50%;background:#b08a54;display:inline-block;margin-bottom:14px}
+h1{font-size:19px;margin:0 0 6px} p{color:#8b7d73;font-size:14px;line-height:1.5;margin:8px 0 0}
+.win{margin-top:16px;font-weight:600;color:#8a6a3c;background:#fbf4e8;border:1px solid #ecdcbf;border-radius:20px;padding:6px 14px;display:inline-block;font-size:13px}</style></head>
+<body><div class="card"><span class="dot"></span><h1>${branch.name} — No-Show Holds</h1>
+<p>This branch view is only available during office hours.</p>
+<div class="win">Open ${winText}</div>
+<p style="margin-top:18px">Please check again once the branch is open. The all-branch monitor keeps watching around the clock.</p></div></body></html>`;
 
 function readBody(req) {
   return new Promise((resolve) => {
@@ -52,15 +65,43 @@ const server = createServer(async (req, res) => {
     }
 
     // --- Secure-or-release (no-show) engine ---
-    // Read-only sweep report: what's within grace, what would be / was released.
-    // Safe to call any time — honours DRY_RUN, only writes when armed live.
-    if (req.method === 'GET' && p === '/api/holds/sweep') return json(res, 200, await sweepAll());
+    // All-branch central monitor view. READ-ONLY sweep so opening the dashboard
+    // never itself cancels or notifies — the background loop is the sole actor.
+    if (req.method === 'GET' && p === '/api/holds/sweep') return json(res, 200, await sweepAll(new Date(), { readOnly: true }));
     if (req.method === 'GET' && p === '/api/holds') return json(res, 200, listHolds());
     // Staff route: verify a non-cash secure (account credit / existing gift card /
     // prepaid package / bank transfer) and confirm the appointment in one step.
     if (req.method === 'POST' && p === '/api/holds/secure') {
       const body = parseBody(await readBody(req), req.headers['content-type']);
       return json(res, 200, await secureAndConfirm(body.appointment_id, { branchId: body.branchId, reason: body.reason, by: body.by }));
+    }
+
+    // --- Per-branch front-desk view (read-only, office-hours only) ---
+    // /desk/<branchId>        → single-branch holds page
+    // /desk/<branchId>/sweep  → single-branch read-only report (JSON)
+    // Each branch's URL is protected by its own login at the nginx layer; here we
+    // enforce the branch scope and the office-hours window (8am–7pm Ghana time).
+    const deskMatch = p.match(/^\/desk\/([a-z0-9_]+)(\/sweep)?$/);
+    if (req.method === 'GET' && deskMatch) {
+      const branchId = deskMatch[1];
+      const isData = !!deskMatch[2];
+      const branch = branchById(branchId);
+      if (!branch) return isData ? json(res, 404, { error: 'unknown_branch' }) : html(res, 404, 'Unknown branch');
+      // Office-hours gate (Ghana = GMT/UTC year-round).
+      const now = new Date();
+      const mins = now.getUTCHours() * 60 + now.getUTCMinutes();
+      const open = mins >= CONFIG.deskOpenMinute && mins < CONFIG.deskCloseMinute;
+      const winText = `${String(Math.floor(CONFIG.deskOpenMinute / 60)).padStart(2, '0')}:00–${String(Math.floor(CONFIG.deskCloseMinute / 60)).padStart(2, '0')}:00 GMT`;
+      if (!open) {
+        if (isData) return json(res, 403, { error: 'outside_office_hours', window: winText });
+        return html(res, 200, renderDeskClosed(branch, winText));
+      }
+      if (isData) return json(res, 200, await sweepBranchReport(branchId, now));
+      const page = await readFile(join(PUBLIC, 'desk.html'), 'utf8');
+      return html(res, 200, page
+        .replaceAll('__BRANCH_ID__', branch.id)
+        .replaceAll('__BRANCH_NAME__', branch.name)
+        .replaceAll('__WINDOW__', winText));
     }
 
     // --- Deposit flow (customer-facing) ---

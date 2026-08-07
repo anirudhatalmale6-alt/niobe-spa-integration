@@ -149,4 +149,12 @@ export const CONFIG = {
   reminderLeadMinutes: Number(process.env.REMINDER_LEAD_MINUTES || 15),
   // Public base URL of this service (used to build Paystack callback/return links).
   publicUrl: process.env.PUBLIC_URL || `http://localhost:${Number(process.env.PORT || 3000)}`,
+
+  // --- Per-branch front-desk view (holds.js / server.js /desk routes) ---
+  // The per-branch read-only holds view is only reachable during office hours so
+  // it can't be opened on personal phones after hours. Window is in Ghana local
+  // time (= GMT/UTC year-round). Default 08:00–19:00 (8am–7pm). The all-branch
+  // central monitor view (/holds.html) is NOT time-restricted.
+  deskOpenMinute: Number(process.env.DESK_OPEN_HOUR ?? 8) * 60,
+  deskCloseMinute: Number(process.env.DESK_CLOSE_HOUR ?? 19) * 60,
 };

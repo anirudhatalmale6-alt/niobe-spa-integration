@@ -289,7 +289,13 @@ async function maybeNotify(branch, appt, a, now) {
 
 // Sweep one branch: assess every open hold, release those due (respecting
 // DRY_RUN + scope), and return a summary of what happened / would happen.
-export async function sweepBranch(branch, now = new Date()) {
+//
+// readOnly=true makes this a PURE report — it never writes to SimpleSpa and never
+// sends a notification, so a dashboard/front-desk VIEW can safely drive it without
+// itself cancelling anything. The background sweep loop is the sole actor; the
+// dashboards render read-only reports. (A 'release'-verdict hold is reported as a
+// candidate in read-only mode; the loop will action it on its own cadence.)
+export async function sweepBranch(branch, now = new Date(), { readOnly = false } = {}) {
   let open;
   try { open = await fetchOpenHolds(branch); }
   catch (err) { return { branchId: branch.id, name: branch.name, ok: false, error: err.message }; }
@@ -298,7 +304,8 @@ export async function sweepBranch(branch, now = new Date()) {
   for (const appt of open) {
     const a = assess(branch, appt, now);
     // Fire the deposit-link / reminder notifications (no-op unless auto-send is on).
-    try { await maybeNotify(branch, appt, a, now); } catch { /* notifications never break the sweep */ }
+    // Never send from a read-only view.
+    if (!readOnly) { try { await maybeNotify(branch, appt, a, now); } catch { /* notifications never break the sweep */ } }
     const row = {
       appointment_id: appt.appointment_id, start: appt.start,
       client: `${appt.client?.first_name || ''} ${appt.client?.last_name || ''}`.trim(),
@@ -306,9 +313,14 @@ export async function sweepBranch(branch, now = new Date()) {
       status_label: appt.status_label, deadline: a.deadline?.toISOString(), tracked: a.tracked,
     };
     if (a.action === 'release') {
-      const r = await doRelease(branch, appt, a.deadline);
-      // In dry-run a "release" is a candidate (would-release); live, it's released.
-      (r.released ? released : candidates).push({ ...row, result: r.entry.result, error: r.error });
+      if (readOnly) {
+        // Report what WOULD be released without touching SimpleSpa.
+        candidates.push({ ...row, result: CONFIG.releaseDryRun ? 'dry_run_would_release' : 'would_release' });
+      } else {
+        const r = await doRelease(branch, appt, a.deadline);
+        // In dry-run a "release" is a candidate (would-release); live, it's released.
+        (r.released ? released : candidates).push({ ...row, result: r.entry.result, error: r.error });
+      }
     } else if (a.action === 'skip') {
       // Out of scope (untracked, and scope='tracked') — a walk-in / phone booking
       // we never originated. Reported for visibility but NEVER auto-cancelled.
@@ -358,12 +370,13 @@ function demoSweep(now) {
 }
 
 // Sweep every branch. Runs branches in parallel; each is independent.
-export async function sweepAll(now = new Date()) {
+// readOnly=true → pure report (no writes/notifications); used by the dashboards.
+export async function sweepAll(now = new Date(), { readOnly = false } = {}) {
   if (CONFIG.demoMode) return demoSweep(now);
   // Keep branch opening hours in step with SimpleSpa staff rosters before we
   // compute any release deadlines (TTL-guarded, best-effort).
   await refreshDerivedHours(BRANCHES, ssPost, { now: now.getTime() });
-  const branches = await Promise.all(BRANCHES.map((b) => sweepBranch(b, now)));
+  const branches = await Promise.all(BRANCHES.map((b) => sweepBranch(b, now, { readOnly })));
   const totals = branches.reduce((t, b) => {
     if (!b.ok) { t.errors++; return t; }
     t.released += b.counts.released; t.candidates += b.counts.candidates;
@@ -377,6 +390,28 @@ export async function sweepAll(now = new Date()) {
     graceMinutes: CONFIG.releaseGraceMinutes,
     branches, totals,
   };
+}
+
+// Single-branch, read-only report — backs the per-branch front-desk desk view.
+// Same shape as sweepAll (so the dashboard renderer is shared) but scoped to one
+// branch and guaranteed never to write. Returns null for an unknown branch id.
+export async function sweepBranchReport(branchId, now = new Date()) {
+  const branch = branchById(branchId);
+  if (!branch) return null;
+  if (CONFIG.demoMode) {
+    const demo = demoSweep(now);
+    const b = demo.branches.find((x) => x.branchId === branchId) || demo.branches[0];
+    return { generatedAt: now.toISOString(), dryRun: CONFIG.releaseDryRun, scope: CONFIG.releaseScope,
+      graceMinutes: CONFIG.releaseGraceMinutes, branches: [b],
+      totals: { ...b.counts, openHolds: b.openHolds, errors: 0 } };
+  }
+  await refreshDerivedHours(BRANCHES, ssPost, { now: now.getTime() });
+  const b = await sweepBranch(branch, now, { readOnly: true });
+  const totals = b.ok
+    ? { ...b.counts, openHolds: b.openHolds, errors: 0 }
+    : { released: 0, candidates: 0, waiting: 0, kept: 0, skipped: 0, openHolds: 0, errors: 1 };
+  return { generatedAt: now.toISOString(), dryRun: CONFIG.releaseDryRun, scope: CONFIG.releaseScope,
+    graceMinutes: CONFIG.releaseGraceMinutes, branches: [b], totals };
 }
 
 // Front-desk manual PROTECT / secure. Used when staff know a payment is pending
