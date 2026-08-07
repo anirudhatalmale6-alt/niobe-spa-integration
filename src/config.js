@@ -134,9 +134,12 @@ export const CONFIG = {
   graphTenantId: process.env.GRAPH_TENANT_ID || '',
   graphClientId: process.env.GRAPH_CLIENT_ID || '',
   graphClientSecret: process.env.GRAPH_CLIENT_SECRET || '',
-  // SMS via Hubtel (reuses the Hubtel API key; sender ID must be registered).
+  // SMS via Hubtel. The SMS/Messaging API key is SEPARATE from the checkout key,
+  // so use its own client id/secret; fall back to the checkout key only if unset.
   notifySmsEnabled: bool(process.env.NOTIFY_SMS_ENABLED, false),
   hubtelSmsSender: process.env.HUBTEL_SMS_SENDER || 'Niobe',
+  hubtelSmsClientId: process.env.HUBTEL_SMS_CLIENT_ID || process.env.HUBTEL_CLIENT_ID || '',
+  hubtelSmsClientSecret: process.env.HUBTEL_SMS_CLIENT_SECRET || process.env.HUBTEL_CLIENT_SECRET || '',
   // Auto-send the deposit link + a pre-release reminder from the sweep. OFF by
   // default so nothing is sent to real clients during the report-only period; it
   // is turned on together with the live go-live.

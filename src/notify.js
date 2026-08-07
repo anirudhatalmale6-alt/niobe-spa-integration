@@ -74,27 +74,31 @@ function toGhMsisdn(phone) {
   return d;
 }
 
-// Send an SMS through Hubtel Quick Send (Basic auth = base64(clientId:clientSecret)),
-// as sender "Niobe". Returns { ok } / { ok:false, error }. Never throws into the
-// caller's flow. NOTE: the Hubtel key must have SMS permission — a checkout-only
-// key returns 401/403 here, which surfaces as { ok:false } for us to act on.
+// Send an SMS through the Hubtel Quick SMS API (sms.hubtel.com/v1/messages/send),
+// as the approved sender "NIOBE". This endpoint authenticates by clientid/clientsecret
+// query params (the form Hubtel's own dashboard hands you), NOT Basic auth. Uses the
+// dedicated SMS key (separate from the checkout key). Returns { ok } / { ok:false, error }.
+// Never throws into the caller's flow.
 export async function sendSMS({ to, content }) {
   if (!CONFIG.notifySmsEnabled) return { ok: false, skipped: 'sms_disabled' };
   const msisdn = toGhMsisdn(to);
   if (!msisdn) return { ok: false, error: 'no_recipient' };
-  if (!CONFIG.hubtelClientId || !CONFIG.hubtelClientSecret) return { ok: false, error: 'hubtel_not_configured' };
-  const auth = Buffer.from(`${CONFIG.hubtelClientId}:${CONFIG.hubtelClientSecret}`).toString('base64');
+  if (!CONFIG.hubtelSmsClientId || !CONFIG.hubtelSmsClientSecret) return { ok: false, error: 'hubtel_sms_not_configured' };
+  const url = new URL('https://sms.hubtel.com/v1/messages/send');
+  url.searchParams.set('clientid', CONFIG.hubtelSmsClientId);
+  url.searchParams.set('clientsecret', CONFIG.hubtelSmsClientSecret);
+  url.searchParams.set('from', CONFIG.hubtelSmsSender);
+  url.searchParams.set('to', msisdn);
+  url.searchParams.set('content', content);
   try {
-    const res = await fetch('https://sms.hubtel.com/v1/messages/send', {
-      method: 'POST',
-      headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ From: CONFIG.hubtelSmsSender, To: msisdn, Content: content }),
-    });
+    const res = await fetch(url, { method: 'GET' });
     const text = await res.text();
     let j; try { j = JSON.parse(text); } catch { j = { raw: text }; }
-    // Hubtel returns status 0 / "0" on accepted, or an HTTP 201/200 with a messageId.
-    const okStatus = res.ok && (j.status === 0 || j.status === '0' || j.messageId || j.MessageId || j.data);
-    if (okStatus) return { ok: true, id: j.messageId || j.MessageId, raw: j };
+    // Hubtel accepts with status 0 / "0" (case-varying) or an HTTP 200/201 + messageId.
+    const status = j.status ?? j.Status;
+    const msgId = j.messageId || j.MessageId;
+    const okStatus = res.ok && (status === 0 || status === '0' || msgId || j.data);
+    if (okStatus) return { ok: true, id: msgId, raw: j };
     return { ok: false, error: `Hubtel SMS ${res.status}: ${text.slice(0, 180)}` };
   } catch (err) {
     return { ok: false, error: err.message };
