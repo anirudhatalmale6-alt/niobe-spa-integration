@@ -156,6 +156,16 @@ function assess(branch, appt, now) {
   const sec = securedByRule(appt);
   if (sec.secured) return { action: 'keep', reason: sec.reason, tracked };
 
+  // The appointment slot has already come and gone. Releasing it would free
+  // nothing (the time is spent either way) and would stamp a cancellation onto
+  // a booking the client may well have turned up for — staff simply never moved
+  // it off New/Rebooked. Report it for visibility, never auto-cancel it. These
+  // belong to the front desk's own tidy-up, not to the no-show timer.
+  const startsAt = new Date(String(appt.start).replace(' ', 'T') + 'Z');
+  if (startsAt.getTime() <= now.getTime()) {
+    return { action: 'skip', reason: 'appointment_already_passed', tracked };
+  }
+
   // Two windows. A tracked online hold (our funnel) gets the tight loophole timer
   // (RELEASE_GRACE_MINUTES; business-minutes only for staff-authorised routes).
   // An untracked/existing booking swept under scope='all' gets the generous
