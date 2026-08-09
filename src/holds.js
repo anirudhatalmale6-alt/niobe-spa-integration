@@ -148,6 +148,40 @@ function securedByRule(appt) {
   return { secured: false };
 }
 
+// --- Exact-duplicate holds (double-submitted booking form) ----------------
+// A client tapping "book" repeatedly creates several identical appointments on
+// the SAME slot. Only one of them is a real reservation; the rest are phantom
+// holds that block the therapist and, once auto-send is on, would text the
+// client once per clone. Identity = same client + same service + same start.
+const duplicateKey = (appt) => [
+  appt.client?.client_id || appt.client?.mobile || `${appt.client?.first_name || ''} ${appt.client?.last_name || ''}`.trim().toLowerCase(),
+  appt.service?.service_id || appt.service?.service_name || '',
+  appt.start,
+].join('|');
+
+// The earliest-created member of each duplicate group is the real reservation;
+// every later clone maps to it. Returns Map<cloneId, primaryId>.
+function duplicateMap(open) {
+  const groups = new Map();
+  for (const appt of open) {
+    const k = duplicateKey(appt);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(appt);
+  }
+  const cloneOf = new Map();
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    // Oldest first; appointment_id breaks ties so the choice is deterministic.
+    const ordered = [...group].sort((a, b) => {
+      const ta = String(a.created_at || a.start), tb = String(b.created_at || b.start);
+      return ta === tb ? String(a.appointment_id).localeCompare(String(b.appointment_id)) : ta.localeCompare(tb);
+    });
+    const primary = ordered[0];
+    for (const clone of ordered.slice(1)) cloneOf.set(clone.appointment_id, primary.appointment_id);
+  }
+  return cloneOf;
+}
+
 // Decide the fate of one open hold as of `now`.
 function assess(branch, appt, now) {
   const createdAt = new Date(String(appt.created_at || appt.start).replace(' ', 'T') + 'Z');
@@ -269,6 +303,9 @@ const fmtDeadline = (d) => (d ? d.toISOString().replace('T', ' ').slice(0, 16) +
 
 async function maybeNotify(branch, appt, a, now) {
   if (!CONFIG.notifyAutosendEnabled) return;
+  // Never message a client about a clone of their own booking — a form
+  // double-submitted eight times must still only ever produce ONE text.
+  if (a.reason === 'duplicate_hold') return;
   const createdAt = new Date(String(appt.created_at || appt.start).replace(' ', 'T') + 'Z');
   const fresh = (now.getTime() - createdAt.getTime()) / 60000 <= CONFIG.notifyFreshMinutes;
   const plan = notifyPlan(appt, a, now, {
@@ -310,9 +347,31 @@ export async function sweepBranch(branch, now = new Date(), { readOnly = false }
   try { open = await fetchOpenHolds(branch); }
   catch (err) { return { branchId: branch.id, name: branch.name, ok: false, error: err.message }; }
 
+  // Two passes: assess every hold, then resolve exact duplicates against their
+  // primary (which needs its own verdict before a clone's fate can be decided).
+  const verdicts = new Map();
+  for (const appt of open) verdicts.set(appt.appointment_id, assess(branch, appt, now));
+  const cloneOf = duplicateMap(open);
+
   const released = [], candidates = [], kept = [], waiting = [], skipped = [];
   for (const appt of open) {
-    const a = assess(branch, appt, now);
+    let a = verdicts.get(appt.appointment_id);
+
+    // A later clone of a slot that is already spoken for. Clear it once the real
+    // reservation has settled — either it is secured (so the clones are pure
+    // noise blocking the therapist) or it has itself passed its deadline. While
+    // the real one is still inside its grace window nothing is touched, so a
+    // fresh double-submit is never punished before the client can pay.
+    const primaryId = cloneOf.get(appt.appointment_id);
+    if (primaryId && a.action !== 'keep') {
+      const primary = verdicts.get(primaryId);
+      const primarySettled = primary && (primary.action === 'keep' || primary.action === 'release');
+      const inScope = CONFIG.releaseScope === 'all' || a.tracked;
+      if (primarySettled && inScope) {
+        a = { ...a, action: 'release', reason: 'duplicate_hold', duplicateOf: primaryId };
+      }
+    }
+
     // Fire the deposit-link / reminder notifications (no-op unless auto-send is on).
     // Never send from a read-only view.
     if (!readOnly) { try { await maybeNotify(branch, appt, a, now); } catch { /* notifications never break the sweep */ } }
@@ -321,6 +380,7 @@ export async function sweepBranch(branch, now = new Date(), { readOnly = false }
       client: `${appt.client?.first_name || ''} ${appt.client?.last_name || ''}`.trim(),
       phone: appt.client?.mobile || '', service: appt.service?.service_name || '',
       status_label: appt.status_label, deadline: a.deadline?.toISOString(), tracked: a.tracked,
+      reason: a.reason, ...(a.duplicateOf ? { duplicateOf: a.duplicateOf } : {}),
     };
     if (a.action === 'release') {
       if (readOnly) {
