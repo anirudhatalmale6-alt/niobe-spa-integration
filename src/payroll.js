@@ -36,16 +36,26 @@ const STATUS_LABEL = {
 
 export const normName = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
 
-// --- Staff map -------------------------------------------------------------
+// --- Staff map + commission rates ------------------------------------------
 // Shape (data/staff-map.json), built once from the sheet Niobe confirm:
 //   {
+//     "rates": {
+//       "default": 10,
+//       "byCategory": { "SPA PACKAGES": 12, "BODY MASSAGE": 10 },
+//       "excludeCategories": ["GIFT CARD EXT FEE", "DELIVERY CHARGE"]
+//     },
 //     "people": [
-//       { "name": "Elizabeth Nubueke", "aliases": ["elizabeth nubuake"], "commissionPct": 10 }
+//       { "name": "Elizabeth Nubueke", "aliases": ["elizabeth nubuake"],
+//         "commissionPct": 12, "byCategory": { "FACIALS": 15 } }
 //     ],
 //     "exclude": ["niobe el service", "niobe staff 1"]
 //   }
 // aliases carry the alternate spellings; exclude carries the house/front-desk
 // logins that are not people and must never appear on a payroll.
+//
+// Niobe described the rate as varying by experience AND by type of service, so
+// rather than pick one, the rate is resolved most-specific-first and each layer
+// is optional. Either model alone works, and so does the combination.
 export function loadStaffMap(file = STAFF_MAP_FILE) {
   let raw;
   try { raw = JSON.parse(readFileSync(file, 'utf8')); } catch { raw = null; }
@@ -56,12 +66,71 @@ export function loadStaffMap(file = STAFF_MAP_FILE) {
     const person = {
       name: p.name,
       commissionPct: p.commissionPct == null ? null : Number(p.commissionPct),
+      byCategory: normaliseRates(p.byCategory),
     };
     byName.set(normName(p.name), person);
     for (const a of p.aliases || []) byName.set(normName(a), person);
   }
-  return { byName, exclude, loaded: !!raw };
+  const rates = {
+    default: raw?.rates?.default == null ? null : Number(raw.rates.default),
+    byCategory: normaliseRates(raw?.rates?.byCategory),
+    excludeCategories: new Set((raw?.rates?.excludeCategories || []).map(normName)),
+  };
+  return { byName, exclude, rates, loaded: !!raw };
 }
+
+const normaliseRates = (obj) => {
+  const m = new Map();
+  for (const [k, v] of Object.entries(obj || {})) if (v != null) m.set(normName(k), Number(v));
+  return m;
+};
+
+// Most specific wins: this person on this kind of treatment, then this person,
+// then this kind of treatment, then the house default. Returns null rather than 0
+// when nothing matches — an unset rate must read as "needs a rate", never as
+// "earned nothing", which is the difference between a visible gap and a silent
+// underpayment.
+export function rateFor(person, category, rates) {
+  const c = normName(category);
+  if (person?.byCategory?.has(c)) return person.byCategory.get(c);
+  if (person?.commissionPct != null) return person.commissionPct;
+  if (rates?.byCategory?.has(c)) return rates.byCategory.get(c);
+  return rates?.default ?? null;
+}
+
+// --- Service categories ----------------------------------------------------
+// Commission is set per kind of treatment, and SimpleSpa already groups the 266
+// services into 12 categories via each service's `label` (SPA PACKAGES, BODY
+// MASSAGE, FACIALS …), so that is the natural unit for a rate rather than asking
+// Niobe to price 266 lines. Built across every branch and keyed by service_id
+// with a name fallback, for the same reason bookings.js prices that way: a live
+// appointment can reference a service_id the branch's current menu no longer has.
+let categoryCache = { at: 0, byId: new Map(), byName: new Map() };
+const CATEGORY_TTL_MS = 10 * 60 * 1000;
+
+export async function serviceCategories(branches = BRANCHES) {
+  if (Date.now() - categoryCache.at < CATEGORY_TTL_MS && categoryCache.byId.size) return categoryCache;
+  const byId = new Map();
+  const byName = new Map();
+  for (const b of branches) {
+    try {
+      const res = await ssPost(b, 'services.php', { per_page: 1000 });
+      for (const s of res.services || []) {
+        const label = String(s.label || '').replace(/\s+/g, ' ').trim() || '(uncategorised)';
+        byId.set(String(s.service_id), label);
+        const k = normName(s.name);
+        if (k && !byName.has(k)) byName.set(k, label);
+      }
+    } catch { /* a branch we can't read must not blank every category */ }
+  }
+  if (byId.size) categoryCache = { at: Date.now(), byId, byName };
+  return categoryCache;
+}
+
+const categoryOf = (cats, appt) =>
+  cats.byId.get(String(appt.service?.service_id))
+  || cats.byName.get(normName(appt.service?.service_name))
+  || '(service no longer in menu)';
 
 // --- Appointment fetch -----------------------------------------------------
 // SimpleSpa caps a page at 1000 rows however large per_page is asked for, and one
@@ -92,6 +161,8 @@ export async function runPayroll({ start, end, staffMap = loadStaffMap(), branch
   const unmatched = new Map();  // normalised name -> { name, branches:Set, treatments, value }
   const skipped = {};           // status label -> count
   const branchErrors = [];
+  const missingRateFor = new Map(); // "person / category" -> count
+  const cats = await serviceCategories(branches);
   let unpriced = 0;
 
   for (const branch of branches) {
@@ -121,6 +192,13 @@ export async function runPayroll({ start, end, staffMap = loadStaffMap(), branch
       const key = normName(staffName);
       if (!key || staffMap.exclude.has(key)) continue;
 
+      const category = categoryOf(cats, appt);
+      // Fees and charges are not treatments and nobody performs them.
+      if (staffMap.rates.excludeCategories.has(normName(category))) {
+        skipped[`Not a treatment: ${category}`] = (skipped[`Not a treatment: ${category}`] || 0) + 1;
+        continue;
+      }
+
       const { price, name: serviceName } = await resolveServicePrice(branch, appt);
       if (!price) unpriced += 1;
 
@@ -137,17 +215,38 @@ export async function runPayroll({ start, end, staffMap = loadStaffMap(), branch
 
       const row = people.get(person.name) || {
         name: person.name,
-        commissionPct: person.commissionPct,
         treatments: 0,
         serviceValue: 0,
+        commission: 0,
         byBranch: {},
+        byCategory: {},
         services: {},
+        unratedValue: 0,
       };
       row.treatments += 1;
       row.serviceValue += price;
+
+      // Commission is worked out per treatment at that treatment's own rate, then
+      // summed — NOT a single rate applied to the month's total, which would be
+      // wrong the moment a therapist does two kinds of work.
+      const pct = rateFor(person, category, staffMap.rates);
+      if (pct == null) {
+        row.unratedValue += price;
+        const k = `${person.name} / ${category}`;
+        missingRateFor.set(k, (missingRateFor.get(k) || 0) + 1);
+      } else {
+        row.commission += price * pct / 100;
+      }
+
       const b = row.byBranch[branch.name] || { treatments: 0, value: 0 };
       b.treatments += 1; b.value += price;
       row.byBranch[branch.name] = b;
+
+      const c = row.byCategory[category] || { treatments: 0, value: 0, commission: 0, pct };
+      c.treatments += 1; c.value += price;
+      if (pct != null) c.commission += price * pct / 100;
+      row.byCategory[category] = c;
+
       row.services[serviceName] = (row.services[serviceName] || 0) + 1;
       people.set(person.name, row);
     }
@@ -156,10 +255,15 @@ export async function runPayroll({ start, end, staffMap = loadStaffMap(), branch
   const rows = [...people.values()].map((r) => ({
     ...r,
     serviceValue: round2(r.serviceValue),
-    // A missing rate yields null, never 0 — a silent zero reads as "earned nothing".
-    commission: r.commissionPct == null ? null : round2(r.serviceValue * r.commissionPct / 100),
+    commission: round2(r.commission),
+    // Value this person did that no rate covers. Non-zero means their commission
+    // is understated and a rate is missing — never present that as a final figure.
+    unratedValue: round2(r.unratedValue),
     byBranch: Object.fromEntries(
       Object.entries(r.byBranch).map(([k, v]) => [k, { ...v, value: round2(v.value) }]),
+    ),
+    byCategory: Object.fromEntries(
+      Object.entries(r.byCategory).map(([k, v]) => [k, { ...v, value: round2(v.value), commission: round2(v.commission) }]),
     ),
   })).sort((a, b) => b.serviceValue - a.serviceValue);
 
@@ -172,8 +276,12 @@ export async function runPayroll({ start, end, staffMap = loadStaffMap(), branch
       treatments: rows.reduce((n, r) => n + r.treatments, 0),
       serviceValue: round2(rows.reduce((n, r) => n + r.serviceValue, 0)),
       commission: round2(rows.reduce((n, r) => n + (r.commission || 0), 0)),
-      missingRates: rows.filter((r) => r.commissionPct == null).map((r) => r.name),
+      // Loud on purpose: if this is non-zero the payroll is NOT ready to pay from.
+      unratedValue: round2(rows.reduce((n, r) => n + r.unratedValue, 0)),
     },
+    missingRates: [...missingRateFor.entries()]
+      .map(([k, treatments]) => ({ who: k, treatments }))
+      .sort((a, b) => b.treatments - a.treatments),
     // Everything below is why the number can be trusted, not decoration.
     unmatchedStaff: [...unmatched.values()]
       .map((u) => ({ ...u, branches: [...u.branches], value: round2(u.value) }))
