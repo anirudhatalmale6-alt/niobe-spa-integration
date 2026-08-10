@@ -31,12 +31,21 @@ const hubtelBranch = (prefix) => ({
   hubtelClientSecret: process.env[`${prefix}_HUBTEL_CLIENT_SECRET`] || '',
 });
 
+// Same arrangement for expressPay. Its API key authenticates the merchant account
+// it belongs to — merchant-id and api-key are sent together on every call — so a
+// branch needs BOTH its own merchant ID and its own key to settle into itself.
+// One without the other falls back to the central account rather than failing.
+const expresspayBranch = (prefix) => ({
+  expresspayMerchantId: process.env[`${prefix}_EXPRESSPAY_MERCHANT_ID`] || '',
+  expresspayApiKey: process.env[`${prefix}_EXPRESSPAY_API_KEY`] || '',
+});
+
 export const BRANCHES = [
-  { id: 'east_legon',     name: 'East Legon',          key: process.env.EAST_LEGON_KEY,     hours: STD_WEEK,   ...hubtelBranch('EAST_LEGON') },
-  { id: 'cantonments',    name: 'Cantonments',         key: process.env.CANTONMENTS_KEY,    hours: STD_WEEK,   ...hubtelBranch('CANTONMENTS') },
-  { id: 'african_regent', name: 'African Regent Hotel',key: process.env.AFRICAN_REGENT_KEY, hours: HOTEL_WEEK, ...hubtelBranch('AFRICAN_REGENT') },
-  { id: 'hfc_c18',        name: 'HFC Community 18',     key: process.env.HFC_C18_KEY,        hours: STD_WEEK,   ...hubtelBranch('HFC_C18') },
-  { id: 'alisa_hotel',    name: 'Alisa Hotel Tema',    key: process.env.ALISA_HOTEL_KEY,    hours: HOTEL_WEEK, ...hubtelBranch('ALISA_HOTEL') },
+  { id: 'east_legon',     name: 'East Legon',          key: process.env.EAST_LEGON_KEY,     hours: STD_WEEK,   ...hubtelBranch('EAST_LEGON'),     ...expresspayBranch('EAST_LEGON') },
+  { id: 'cantonments',    name: 'Cantonments',         key: process.env.CANTONMENTS_KEY,    hours: STD_WEEK,   ...hubtelBranch('CANTONMENTS'),    ...expresspayBranch('CANTONMENTS') },
+  { id: 'african_regent', name: 'African Regent Hotel',key: process.env.AFRICAN_REGENT_KEY, hours: HOTEL_WEEK, ...hubtelBranch('AFRICAN_REGENT'), ...expresspayBranch('AFRICAN_REGENT') },
+  { id: 'hfc_c18',        name: 'HFC Community 18',     key: process.env.HFC_C18_KEY,        hours: STD_WEEK,   ...hubtelBranch('HFC_C18'),        ...expresspayBranch('HFC_C18') },
+  { id: 'alisa_hotel',    name: 'Alisa Hotel Tema',    key: process.env.ALISA_HOTEL_KEY,    hours: HOTEL_WEEK, ...hubtelBranch('ALISA_HOTEL'),    ...expresspayBranch('ALISA_HOTEL') },
 ];
 
 // The 4-char branch code embedded in a payment reference (NIOBE-<BR4>-<stamp>).

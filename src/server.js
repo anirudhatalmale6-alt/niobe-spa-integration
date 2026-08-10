@@ -10,6 +10,7 @@ import { startPurchase, finalizePurchase, getPurchase } from './giftcards.js';
 import { sweepAll, sweepBranchReport, listHolds, startSweepLoop, secureAndConfirm } from './holds.js';
 import { getCatalog } from './giftup.js';
 import { verifyWebhookSignature, parseWebhookEvent, displayName as gatewayName } from './gateway.js';
+import { noteReturn as noteExpressPayReturn } from './expresspay.js';
 import { renderPayPage, renderCheckout, renderSuccess, renderPhoneEntry, renderChooser, renderNoMatch, renderCreditClaim, renderGiftCardPage, renderGiftCheckout, renderGiftCardSuccess, renderGiftCardPending } from './views.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -32,6 +33,30 @@ h1{font-size:19px;margin:0 0 6px} p{color:#8b7d73;font-size:14px;line-height:1.5
 <p>This branch view is only available during office hours.</p>
 <div class="win">Open ${winText}</div>
 <p style="margin-top:18px">Please check again once the branch is open. The all-branch monitor keeps watching around the clock.</p></div></body></html>`;
+
+// Read our payment reference off a gateway return URL.
+//
+// expressPay appends its own params with a second '?' instead of '&', so a
+// redirect-url of  /pay/callback?reference=NIOBE-EAST-1  comes back as
+//   /pay/callback?reference=NIOBE-EAST-1?order-id=NIOBE-EAST-1&token=…
+// which parses the reference as "NIOBE-EAST-1?order-id=NIOBE-EAST-1". Left as-is
+// the lookup misses, and a customer who has genuinely paid is never confirmed.
+// So: cut the reference at any stray '?', and fall back to expressPay's own
+// order-id. Hubtel returns a clean ?reference= and is unaffected.
+function refFrom(url) {
+  const raw = url.searchParams.get('reference') || '';
+  const clean = raw.split('?')[0];
+  return clean || url.searchParams.get('order-id') || '';
+}
+
+// expressPay hands the token back on the browser return. Record it before finalising:
+// query.php will not answer without it, and the process that created the checkout may
+// have been restarted since.
+function noteGatewayReturn(url) {
+  const token = url.searchParams.get('token');
+  const ref = refFrom(url);
+  if (token && ref) noteExpressPayReturn(ref, token);
+}
 
 function readBody(req) {
   return new Promise((resolve) => {
@@ -170,13 +195,15 @@ const server = createServer(async (req, res) => {
       // so if it's not confirmed yet we show a friendly "confirming" page — the Hubtel webhook
       // (server-to-server) issues the card the moment payment clears, so no purchase is lost.
       let result;
-      try { result = await finalizePurchase(url.searchParams.get('reference')); }
+      noteGatewayReturn(url);
+      try { result = await finalizePurchase(refFrom(url)); }
       catch { result = { ok: false }; }
       if (result.ok) return html(res, 200, renderGiftCardSuccess(result));
       return html(res, 200, renderGiftCardPending());
     }
     if (req.method === 'GET' && p === '/pay/callback') {
-      const result = await finalizeDeposit(url.searchParams.get('reference'));
+      noteGatewayReturn(url);
+      const result = await finalizeDeposit(refFrom(url));
       if (!result.ok) return html(res, 402, 'Payment was not completed. Please try again.');
       return html(res, 200, renderSuccess(result));
     }

@@ -1,4 +1,7 @@
-import { CONFIG } from './config.js';
+import { mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
+import { CONFIG, branchById, branchByRefCode } from './config.js';
 
 // expressPay adapter — Ghana cards + mobile money. Same interface as the other adapters
 // so it drops straight into the gateway selector as Hubtel's backup.
@@ -9,26 +12,84 @@ import { CONFIG } from './config.js';
 // query is the source of truth). query.php needs the token, so we keep reference->token.
 const tokens = new Map(); // our reference (order-id) -> expressPay token
 
+// The token is the ONLY handle query.php accepts, so losing it means a customer who
+// really paid can never be verified or auto-confirmed. Held in memory the map died
+// on every restart/deploy, so it is mirrored to disk the moment a token is issued.
+const DATA_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
+const TOKENS_FILE = join(DATA_DIR, 'expresspay-tokens.json');
+const TOKEN_RETENTION_MS = 30 * 86400000;
+
+function saveTokens() {
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    writeFileSync(TOKENS_FILE, JSON.stringify(Object.fromEntries(tokens)));
+  } catch { /* never let bookkeeping break a checkout */ }
+}
+function loadTokens() {
+  try {
+    const raw = JSON.parse(readFileSync(TOKENS_FILE, 'utf8'));
+    const cutoff = Date.now() - TOKEN_RETENTION_MS;
+    for (const [ref, t] of Object.entries(raw || {})) {
+      const rec = typeof t === 'string' ? { token: t, at: Date.now() } : t;
+      if (!rec?.token || (rec.at && rec.at < cutoff)) continue;
+      tokens.set(ref, rec);
+    }
+  } catch { /* first run, or unreadable — start empty */ }
+}
+function rememberToken(reference, token) {
+  if (!reference || !token) return;
+  const existing = tokens.get(reference);
+  if (existing?.token === token) return;
+  tokens.set(reference, { token, at: Date.now() });
+  saveTokens();
+}
+function tokenFor(reference) {
+  const rec = tokens.get(reference);
+  return typeof rec === 'string' ? rec : rec?.token;
+}
+loadTokens();
+
+// expressPay's browser return carries order-id + token; record it so verification
+// still works even if this process never saw the checkout that created it.
+export function noteReturn(reference, token) { rememberToken(reference, token); }
+
 export const displayName = 'expressPay';
 
 function form(params) {
   return new URLSearchParams(params).toString();
 }
 
+// Which expressPay account collects this payment. Mirrors the Hubtel router: a fully
+// configured branch settles into itself, anything else uses the central OGV account.
+// initiate knows the branch from metadata, the query only has the reference, so it
+// recovers the branch from the code the reference carries (NIOBE-<BR4>-…). Both paths
+// MUST land on the same account — a payment taken by a branch but queried against the
+// central account reads back as unknown, and the booking would never auto-confirm.
+function routeFor({ branchId, reference }) {
+  const branch = branchId
+    ? branchById(branchId)
+    : branchByRefCode(String(reference || '').split('-')[1]);
+  if (branch?.expresspayMerchantId && branch.expresspayApiKey) {
+    return { merchantId: branch.expresspayMerchantId, apiKey: branch.expresspayApiKey };
+  }
+  return { merchantId: CONFIG.expresspayMerchantId, apiKey: CONFIG.expresspayApiKey };
+}
+
 export async function initializeTransaction({ email, amount, reference, metadata, callbackUrl }) {
   if (CONFIG.paymentDemo) {
-    tokens.set(reference, `demo-${reference}`);
+    rememberToken(reference, `demo-${reference}`);
     const url = `${CONFIG.publicUrl}/demo/checkout?reference=${encodeURIComponent(reference)}`;
     return { authorization_url: url, reference, demo: true };
   }
 
+  const route = routeFor({ branchId: metadata?.branchId });
   const [firstname, ...rest] = String(metadata?.customerName || 'Niobe Customer').split(' ');
   const res = await fetch(`${CONFIG.expresspayBase}/submit.php`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: form({
-      'merchant-id': CONFIG.expresspayMerchantId,
-      'api-key': CONFIG.expresspayApiKey,
+      'merchant-id': route.merchantId,
+      'api-key': route.apiKey,
       'firstname': firstname,
       'lastname': rest.join(' ') || '-',
       'email': email,
@@ -44,7 +105,7 @@ export async function initializeTransaction({ email, amount, reference, metadata
   if (Number(json.status) !== 1 || !json.token) {
     throw new Error(json['result-text'] || json.message || 'expressPay submit failed');
   }
-  tokens.set(reference, json.token);
+  rememberToken(reference, json.token);
   return { authorization_url: `${CONFIG.expresspayBase}/checkout.php?token=${encodeURIComponent(json.token)}`, reference };
 }
 
@@ -53,12 +114,13 @@ export async function verifyTransaction(reference) {
   if (CONFIG.paymentDemo) {
     return { success: true, reference, amount: null, demo: true };
   }
-  const token = tokens.get(reference);
+  const token = tokenFor(reference);
   if (!token) return { success: false, reference, amount: null, error: 'no token for reference' };
+  const route = routeFor({ reference });
   const res = await fetch(`${CONFIG.expresspayBase}/query.php`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: form({ 'merchant-id': CONFIG.expresspayMerchantId, 'api-key': CONFIG.expresspayApiKey, token }),
+    body: form({ 'merchant-id': route.merchantId, 'api-key': route.apiKey, token }),
   });
   const json = await res.json();
   const resultText = String(json['result-text'] || '').toLowerCase();
@@ -81,6 +143,6 @@ export function parseWebhookEvent(rawBody) {
   try { data = JSON.parse(rawBody || '{}'); } catch { data = Object.fromEntries(new URLSearchParams(rawBody || '')); }
   const reference = data['order-id'] || data.orderId;
   const token = data.token;
-  if (reference && token) tokens.set(reference, token); // ensure verify can find the token
+  if (reference && token) rememberToken(reference, token); // ensure verify can find the token
   return { reference, isPaymentSuccess: Boolean(reference) };
 }
