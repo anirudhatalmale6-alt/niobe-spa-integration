@@ -8,26 +8,39 @@ const HUBTEL_STATUS = 'https://api-txnstatus.hubtel.com/transactions';
 
 export const displayName = 'Hubtel';
 
-function basicAuth() {
-  const token = Buffer.from(`${CONFIG.hubtelClientId}:${CONFIG.hubtelClientSecret}`).toString('base64');
-  return `Basic ${token}`;
+function basicAuth({ clientId, clientSecret }) {
+  return `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`;
 }
 
-// Which Hubtel account collects (and is later queried for) this payment. A branch
-// with its own account number settles into that branch so it can see the money and
-// reconcile it locally; anything else — gift cards, a branch with no account set —
-// falls back to the central online account.
+// Which Hubtel account collects (and is later queried for) this payment, and the
+// credentials that speak for it. A branch that is fully configured collects into
+// itself so it can see the money and reconcile locally; anything else — gift
+// cards, a partly-configured branch — uses the central online account.
 //
-// initiate knows the branch from metadata; the status check only has the reference,
-// so it recovers the branch from the code the reference carries (NIOBE-<BR4>-...).
-// Both paths MUST resolve the same account: a payment collected into a branch but
-// queried against the central account reads back as "not found" and the booking
-// would never auto-confirm.
-function accountFor({ branchId, reference }) {
+// The account and the key travel together, always. Addressing a branch account
+// with the central key is not authorised, and Hubtel rejects the pairing.
+//
+// initiate knows the branch from metadata; the status check only has the
+// reference, so it recovers the branch from the code the reference carries
+// (NIOBE-<BR4>-...). Both paths MUST resolve the same route: a payment collected
+// into a branch but queried against the central account reads back as "not found"
+// and the booking would never auto-confirm.
+function routeFor({ branchId, reference }) {
   const branch = branchId
     ? branchById(branchId)
     : branchByRefCode(String(reference || '').split('-')[1]);
-  return branch?.hubtelAccount || CONFIG.hubtelMerchantAccount;
+  if (branch?.hubtelAccount && branch.hubtelClientId && branch.hubtelClientSecret) {
+    return {
+      account: branch.hubtelAccount,
+      clientId: branch.hubtelClientId,
+      clientSecret: branch.hubtelClientSecret,
+    };
+  }
+  return {
+    account: CONFIG.hubtelMerchantAccount,
+    clientId: CONFIG.hubtelClientId,
+    clientSecret: CONFIG.hubtelClientSecret,
+  };
 }
 
 // What the branch sees on its Hubtel transaction list. Without this every line
@@ -48,9 +61,10 @@ export async function initializeTransaction({ email, amount, reference, metadata
     return { authorization_url: url, reference, demo: true };
   }
 
+  const route = routeFor({ branchId: metadata?.branchId });
   const res = await fetch(HUBTEL_INITIATE, {
     method: 'POST',
-    headers: { 'Authorization': basicAuth(), 'Content-Type': 'application/json' },
+    headers: { 'Authorization': basicAuth(route), 'Content-Type': 'application/json' },
     body: JSON.stringify({
       // Hubtel expects the amount as a decimal in GHS (not minor units).
       totalAmount: Number(amount),
@@ -58,7 +72,7 @@ export async function initializeTransaction({ email, amount, reference, metadata
       callbackUrl: `${CONFIG.publicUrl}/webhook/payment`,   // server-to-server notification
       returnUrl: callbackUrl,                                // browser lands here after paying
       cancellationUrl: CONFIG.publicUrl,
-      merchantAccountNumber: accountFor({ branchId: metadata?.branchId }),
+      merchantAccountNumber: route.account,
       clientReference: reference,
       payeeName: metadata?.customerName,
       payeeMobileNumber: metadata?.customerPhone,
@@ -79,8 +93,9 @@ export async function verifyTransaction(reference) {
   if (CONFIG.paymentDemo) {
     return { success: true, reference, amount: null, demo: true };
   }
-  const url = `${HUBTEL_STATUS}/${encodeURIComponent(accountFor({ reference }))}/status?clientReference=${encodeURIComponent(reference)}`;
-  const res = await fetch(url, { headers: { 'Authorization': basicAuth() } });
+  const route = routeFor({ reference });
+  const url = `${HUBTEL_STATUS}/${encodeURIComponent(route.account)}/status?clientReference=${encodeURIComponent(reference)}`;
+  const res = await fetch(url, { headers: { 'Authorization': basicAuth(route) } });
   const json = await res.json();
   const data = json.data || {};
   const status = String(data.status || '').toLowerCase();

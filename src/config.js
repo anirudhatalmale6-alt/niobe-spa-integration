@@ -17,17 +17,26 @@ const STD_WEEK = {
 // request). Flip HOTEL_SUNDAY_OPEN=true to open them Sundays without a code change.
 const HOTEL_WEEK = { ...STD_WEEK, 0: boolEarly(process.env.HOTEL_SUNDAY_OPEN, false) ? STD_WEEK[0] : null };
 
-// hubtelAccount = that branch's OWN Hubtel merchant account number, so an online
-// deposit settles straight into the branch that will deliver the treatment
-// instead of pooling in the central online account. Leave a branch's value unset
-// and it falls back to HUBTEL_MERCHANT_ACCOUNT (the central OGV account), which
-// is exactly today's behaviour — so this is inert until the numbers are filled in.
+// Each branch can collect its own online deposits: its own Hubtel merchant
+// account number plus its own API ID/key, so the money lands with the branch that
+// delivers the treatment instead of pooling in the central online account.
+//
+// All three values are needed together — a branch account addressed with the
+// central account's key is not authorised and Hubtel rejects it. A branch missing
+// any of the three falls back wholly to the central OGV credentials, which is
+// exactly today's behaviour, so this stays inert until a branch is fully filled in.
+const hubtelBranch = (prefix) => ({
+  hubtelAccount: process.env[`${prefix}_HUBTEL_ACCOUNT`] || '',
+  hubtelClientId: process.env[`${prefix}_HUBTEL_CLIENT_ID`] || '',
+  hubtelClientSecret: process.env[`${prefix}_HUBTEL_CLIENT_SECRET`] || '',
+});
+
 export const BRANCHES = [
-  { id: 'east_legon',     name: 'East Legon',          key: process.env.EAST_LEGON_KEY,     hours: STD_WEEK,   hubtelAccount: process.env.EAST_LEGON_HUBTEL_ACCOUNT || '' },
-  { id: 'cantonments',    name: 'Cantonments',         key: process.env.CANTONMENTS_KEY,    hours: STD_WEEK,   hubtelAccount: process.env.CANTONMENTS_HUBTEL_ACCOUNT || '' },
-  { id: 'african_regent', name: 'African Regent Hotel',key: process.env.AFRICAN_REGENT_KEY, hours: HOTEL_WEEK, hubtelAccount: process.env.AFRICAN_REGENT_HUBTEL_ACCOUNT || '' },
-  { id: 'hfc_c18',        name: 'HFC Community 18',     key: process.env.HFC_C18_KEY,        hours: STD_WEEK,   hubtelAccount: process.env.HFC_C18_HUBTEL_ACCOUNT || '' },
-  { id: 'alisa_hotel',    name: 'Alisa Hotel Tema',    key: process.env.ALISA_HOTEL_KEY,    hours: HOTEL_WEEK, hubtelAccount: process.env.ALISA_HOTEL_HUBTEL_ACCOUNT || '' },
+  { id: 'east_legon',     name: 'East Legon',          key: process.env.EAST_LEGON_KEY,     hours: STD_WEEK,   ...hubtelBranch('EAST_LEGON') },
+  { id: 'cantonments',    name: 'Cantonments',         key: process.env.CANTONMENTS_KEY,    hours: STD_WEEK,   ...hubtelBranch('CANTONMENTS') },
+  { id: 'african_regent', name: 'African Regent Hotel',key: process.env.AFRICAN_REGENT_KEY, hours: HOTEL_WEEK, ...hubtelBranch('AFRICAN_REGENT') },
+  { id: 'hfc_c18',        name: 'HFC Community 18',     key: process.env.HFC_C18_KEY,        hours: STD_WEEK,   ...hubtelBranch('HFC_C18') },
+  { id: 'alisa_hotel',    name: 'Alisa Hotel Tema',    key: process.env.ALISA_HOTEL_KEY,    hours: HOTEL_WEEK, ...hubtelBranch('ALISA_HOTEL') },
 ];
 
 // The 4-char branch code embedded in a payment reference (NIOBE-<BR4>-<stamp>).
