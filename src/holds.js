@@ -310,11 +310,50 @@ async function doRelease(branch, appt, deadline) {
 }
 
 // --- Deposit-link notifications (deposit link on booking + pre-release reminder) ---
-// Dedup across sweeps (in-memory; the freshness window bounds any re-send after a
-// restart). These are separate from the hold registry so notifying never changes
-// a booking's release grace (registering would flip it to the tracked timer).
+// Dedup across sweeps. These are separate from the hold registry so notifying never
+// changes a booking's release grace (registering would flip it to the tracked timer).
+//
+// These MUST survive a restart. Held only in memory the freshness window was doing
+// the bounding, which meant every deploy inside NOTIFY_FRESH_MINUTES re-texted every
+// still-open booking from that window — six sends to one client on a busy deploy day.
+// The client pays for each SMS and the customer just sees spam, so the record of
+// "already told them" is now on disk, same as the hold registry.
+const NOTIFIED_FILE = join(DATA_DIR, 'notified.json');
+const NOTIFY_RETENTION_MS = 30 * 86400000;
 const notifiedIds = new Set();
 const remindedIds = new Set();
+const notifyStamps = new Map(); // id -> ms, so old entries can be aged out
+
+function saveNotified() {
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    writeFileSync(NOTIFIED_FILE, JSON.stringify({
+      notified: [...notifiedIds],
+      reminded: [...remindedIds],
+      stamps: Object.fromEntries(notifyStamps),
+    }));
+  } catch { /* persistence must never break the sweep */ }
+}
+
+function loadNotified() {
+  try {
+    const raw = JSON.parse(readFileSync(NOTIFIED_FILE, 'utf8'));
+    const cutoff = Date.now() - NOTIFY_RETENTION_MS;
+    const stamps = raw?.stamps || {};
+    const keep = (id) => !stamps[id] || stamps[id] >= cutoff;
+    for (const id of raw?.notified || []) if (keep(id)) { notifiedIds.add(id); notifyStamps.set(id, stamps[id] || Date.now()); }
+    for (const id of raw?.reminded || []) if (keep(id)) { remindedIds.add(id); notifyStamps.set(id, stamps[id] || Date.now()); }
+  } catch { /* no file yet, or unreadable — start empty */ }
+}
+
+// Record that a client has now been messaged about this booking, durably.
+function markNotified(set, id) {
+  set.add(id);
+  notifyStamps.set(id, Date.now());
+  saveNotified();
+}
+
+loadNotified();
 
 // Pure decision: given a hold, its assessment, and what we've already sent, what
 // should we send now? Returns { first, reminder } booleans. Exported for testing.
@@ -353,13 +392,13 @@ async function maybeNotify(branch, appt, a, now) {
   const id = appt.appointment_id;
 
   if (plan.first) {
-    notifiedIds.add(id);
+    markNotified(notifiedIds, id);
     if (email) await sendDepositEmail({ to: email, name: appt.client?.first_name, service: appt.service?.service_name, datetime: fmtWhen(appt.start), ...common });
     if (phone) await sendDepositSMS({ to: phone, ...common });
     auditRelease({ at: new Date().toISOString(), action: 'notify_deposit_link', branchId: branch.id, appointment_id: id, email: !!email, sms: !!phone });
   }
   if (plan.reminder) {
-    remindedIds.add(id);
+    markNotified(remindedIds, id);
     if (email) await sendDepositEmail({ to: email, name: appt.client?.first_name, service: appt.service?.service_name, datetime: fmtWhen(appt.start), ...common });
     if (phone) await sendDepositSMS({ to: phone, ...common });
     auditRelease({ at: new Date().toISOString(), action: 'notify_reminder', branchId: branch.id, appointment_id: id, email: !!email, sms: !!phone });
