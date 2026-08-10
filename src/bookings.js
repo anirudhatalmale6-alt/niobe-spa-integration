@@ -119,7 +119,7 @@ async function globalNamePrice() {
 
 // Resolve a live appointment's price: exact service_id → same-branch name →
 // global name. Returns { name, price, source }.
-async function resolveServicePrice(branch, appt) {
+export async function resolveServicePrice(branch, appt) {
   const { idMap, nameMap } = await servicePriceMaps(branch);
   const byId = idMap.get(String(appt.service?.service_id));
   const apptName = appt.service?.service_name || byId?.name || '';
