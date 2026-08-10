@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync } from 'fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { BRANCHES, CONFIG, branchById } from './config.js';
@@ -85,6 +85,36 @@ function auditRelease(entry) {
 // bookings share a groupId so they secure and release together.
 const holds = new Map(); // appointment_id -> { branchId, groupId, secured, staffAuth, registeredAt, reason }
 
+// The registry has to survive a restart. Being in it is what earns a booking the
+// tight online timer; everything else gets the generous call-to-confirm window.
+// Held only in memory, every deploy silently promoted recent online holds to the
+// long window and the one-hour rule quietly stopped applying to them — safe, but
+// not what was asked for. Persisted, a restart is invisible to the engine.
+const HOLDS_FILE = join(DATA_DIR, 'holds.json');
+const HOLD_RETENTION_MS = 30 * 86400000;
+
+function saveHolds() {
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    writeFileSync(HOLDS_FILE, JSON.stringify(Object.fromEntries(holds)));
+  } catch { /* persistence must never break the booking flow */ }
+}
+
+// Restore on boot, dropping anything long past — an appointment from months ago
+// can never be a live hold, and the file should not grow without bound.
+function loadHolds() {
+  try {
+    const raw = JSON.parse(readFileSync(HOLDS_FILE, 'utf8'));
+    const cutoff = Date.now() - HOLD_RETENTION_MS;
+    for (const [id, h] of Object.entries(raw || {})) {
+      if (!h || (h.registeredAt && Date.parse(h.registeredAt) < cutoff)) continue;
+      holds.set(id, h);
+    }
+  } catch { /* no file yet, or unreadable — start empty */ }
+  return holds.size;
+}
+loadHolds();
+
 // Register (or refresh) an online hold that came through our funnel. `staffAuth`
 // marks routes that need a person to authorise them (credit / existing gift card
 // / bank transfer / prepaid package) so the deadline rolls into business hours.
@@ -97,6 +127,7 @@ export function registerHold(appointmentId, { branchId, groupId = null, staffAut
     reason: reason || existing?.reason || '',
     registeredAt: existing?.registeredAt || new Date().toISOString(),
   });
+  saveHolds();
 }
 
 // Mark a hold (and every sibling in its group) secured, so the sweep never
@@ -110,6 +141,7 @@ export function markSecured(appointmentId, reason = 'secured') {
       if (other.groupId === h.groupId) { other.secured = true; other.reason = reason; }
     }
   }
+  if (h) saveHolds();
 }
 
 export function getHold(appointmentId) { return holds.get(appointmentId); }
@@ -268,7 +300,7 @@ async function doRelease(branch, appt, deadline) {
     entry.result = 'released';
     auditRelease(entry);
     const h = holds.get(appt.appointment_id);
-    if (h) h.reason = 'released';
+    if (h) { h.reason = 'released'; saveHolds(); }
     return { released: true, entry };
   } catch (err) {
     entry.result = 'error'; entry.error = err.message;
