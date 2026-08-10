@@ -1,4 +1,4 @@
-import { CONFIG } from './config.js';
+import { CONFIG, branchRefCode } from './config.js';
 
 // Deposit rule (Niobe): a customer must pay a MINIMUM of 50% of the service price
 // to secure the slot, or they may pay in full. Same across all services and branches.
@@ -50,6 +50,8 @@ let seq = 0;
 export function makeReference(branchId /* , appointmentId */) {
   seq = (seq + 1) % 1000;
   const t = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(2, 14); // YYMMDDHHMMSS
-  const b = String(branchId || 'br').replace(/[^a-z0-9]/gi, '').slice(0, 4).toUpperCase() || 'BR';
+  // Same helper the payment adapters use to read the branch back out of a
+  // reference, so settlement and status-check always resolve the same account.
+  const b = branchRefCode(branchId) || 'BR';
   return `NIOBE-${b}-${t}${String(seq).padStart(3, '0')}`;
 }

@@ -17,13 +17,29 @@ const STD_WEEK = {
 // request). Flip HOTEL_SUNDAY_OPEN=true to open them Sundays without a code change.
 const HOTEL_WEEK = { ...STD_WEEK, 0: boolEarly(process.env.HOTEL_SUNDAY_OPEN, false) ? STD_WEEK[0] : null };
 
+// hubtelAccount = that branch's OWN Hubtel merchant account number, so an online
+// deposit settles straight into the branch that will deliver the treatment
+// instead of pooling in the central online account. Leave a branch's value unset
+// and it falls back to HUBTEL_MERCHANT_ACCOUNT (the central OGV account), which
+// is exactly today's behaviour — so this is inert until the numbers are filled in.
 export const BRANCHES = [
-  { id: 'east_legon',     name: 'East Legon',          key: process.env.EAST_LEGON_KEY,     hours: STD_WEEK },
-  { id: 'cantonments',    name: 'Cantonments',         key: process.env.CANTONMENTS_KEY,    hours: STD_WEEK },
-  { id: 'african_regent', name: 'African Regent Hotel',key: process.env.AFRICAN_REGENT_KEY, hours: HOTEL_WEEK },
-  { id: 'hfc_c18',        name: 'HFC Community 18',     key: process.env.HFC_C18_KEY,        hours: STD_WEEK },
-  { id: 'alisa_hotel',    name: 'Alisa Hotel Tema',    key: process.env.ALISA_HOTEL_KEY,    hours: HOTEL_WEEK },
+  { id: 'east_legon',     name: 'East Legon',          key: process.env.EAST_LEGON_KEY,     hours: STD_WEEK,   hubtelAccount: process.env.EAST_LEGON_HUBTEL_ACCOUNT || '' },
+  { id: 'cantonments',    name: 'Cantonments',         key: process.env.CANTONMENTS_KEY,    hours: STD_WEEK,   hubtelAccount: process.env.CANTONMENTS_HUBTEL_ACCOUNT || '' },
+  { id: 'african_regent', name: 'African Regent Hotel',key: process.env.AFRICAN_REGENT_KEY, hours: HOTEL_WEEK, hubtelAccount: process.env.AFRICAN_REGENT_HUBTEL_ACCOUNT || '' },
+  { id: 'hfc_c18',        name: 'HFC Community 18',     key: process.env.HFC_C18_KEY,        hours: STD_WEEK,   hubtelAccount: process.env.HFC_C18_HUBTEL_ACCOUNT || '' },
+  { id: 'alisa_hotel',    name: 'Alisa Hotel Tema',    key: process.env.ALISA_HOTEL_KEY,    hours: HOTEL_WEEK, hubtelAccount: process.env.ALISA_HOTEL_HUBTEL_ACCOUNT || '' },
 ];
+
+// The 4-char branch code embedded in a payment reference (NIOBE-<BR4>-<stamp>).
+// Kept here so the reference builder and the reference parser can never drift.
+export const branchRefCode = (id) => String(id || '').replace(/[^a-z0-9]/gi, '').slice(0, 4).toUpperCase();
+
+// Recover the branch from a reference's code. Returns undefined for non-branch
+// references (e.g. gift cards, NIOBE-GC-...), which correctly fall back to central.
+export function branchByRefCode(code) {
+  const c = String(code || '').toUpperCase();
+  return c ? BRANCHES.find((b) => branchRefCode(b.id) === c) : undefined;
+}
 
 const bool = (v, d) => (v === undefined ? d : String(v).toLowerCase() === 'true');
 

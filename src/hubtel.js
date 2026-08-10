@@ -1,4 +1,4 @@
-import { CONFIG } from './config.js';
+import { CONFIG, branchById, branchByRefCode } from './config.js';
 
 // Hubtel Online Checkout adapter — Ghana cards + mobile money (MTN, Telecel, AirtelTigo).
 // Same interface as the Paystack adapter so the rest of the flow is unchanged.
@@ -11,6 +11,32 @@ export const displayName = 'Hubtel';
 function basicAuth() {
   const token = Buffer.from(`${CONFIG.hubtelClientId}:${CONFIG.hubtelClientSecret}`).toString('base64');
   return `Basic ${token}`;
+}
+
+// Which Hubtel account collects (and is later queried for) this payment. A branch
+// with its own account number settles into that branch so it can see the money and
+// reconcile it locally; anything else — gift cards, a branch with no account set —
+// falls back to the central online account.
+//
+// initiate knows the branch from metadata; the status check only has the reference,
+// so it recovers the branch from the code the reference carries (NIOBE-<BR4>-...).
+// Both paths MUST resolve the same account: a payment collected into a branch but
+// queried against the central account reads back as "not found" and the booking
+// would never auto-confirm.
+function accountFor({ branchId, reference }) {
+  const branch = branchId
+    ? branchById(branchId)
+    : branchByRefCode(String(reference || '').split('-')[1]);
+  return branch?.hubtelAccount || CONFIG.hubtelMerchantAccount;
+}
+
+// What the branch sees on its Hubtel transaction list. Without this every line
+// reads as an anonymous deposit; with it, the branch and the payer are on the row.
+function describe(metadata, reference) {
+  const branch = metadata?.branchId ? branchById(metadata.branchId) : null;
+  const who = [metadata?.customerName, metadata?.customerPhone].filter(Boolean).join(' ');
+  const base = `Niobe ${branch?.name || 'Beauty'} deposit`;
+  return `${base}${who ? ` - ${who}` : ''} - ${metadata?.bookingId || reference}`.slice(0, 100);
 }
 
 // Create a checkout and return the hosted payment link (checkoutUrl).
@@ -28,11 +54,11 @@ export async function initializeTransaction({ email, amount, reference, metadata
     body: JSON.stringify({
       // Hubtel expects the amount as a decimal in GHS (not minor units).
       totalAmount: Number(amount),
-      description: `Niobe Beauty deposit — ${metadata?.bookingId || reference}`,
+      description: describe(metadata, reference),
       callbackUrl: `${CONFIG.publicUrl}/webhook/payment`,   // server-to-server notification
       returnUrl: callbackUrl,                                // browser lands here after paying
       cancellationUrl: CONFIG.publicUrl,
-      merchantAccountNumber: CONFIG.hubtelMerchantAccount,
+      merchantAccountNumber: accountFor({ branchId: metadata?.branchId }),
       clientReference: reference,
       payeeName: metadata?.customerName,
       payeeMobileNumber: metadata?.customerPhone,
@@ -53,7 +79,7 @@ export async function verifyTransaction(reference) {
   if (CONFIG.paymentDemo) {
     return { success: true, reference, amount: null, demo: true };
   }
-  const url = `${HUBTEL_STATUS}/${encodeURIComponent(CONFIG.hubtelMerchantAccount)}/status?clientReference=${encodeURIComponent(reference)}`;
+  const url = `${HUBTEL_STATUS}/${encodeURIComponent(accountFor({ reference }))}/status?clientReference=${encodeURIComponent(reference)}`;
   const res = await fetch(url, { headers: { 'Authorization': basicAuth() } });
   const json = await res.json();
   const data = json.data || {};
