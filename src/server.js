@@ -12,8 +12,9 @@ import { getCatalog } from './giftup.js';
 import { verifyWebhookSignature, parseWebhookEvent, displayName as gatewayName } from './gateway.js';
 import { noteReturn as noteExpressPayReturn } from './expresspay.js';
 import { renderPayPage, renderCheckout, renderSuccess, renderPhoneEntry, renderChooser, renderNoMatch, renderCreditClaim, renderGiftCardPage, renderGiftCheckout, renderGiftCardSuccess, renderGiftCardPending,
-  renderGiftRedeemPage, renderGiftRedeemCheck, renderGiftRedeemShort, renderGiftRedeemDone, renderGiftRedeemProblem } from './views.js';
-import { checkGiftCard, redeemForBooking } from './redeem.js';
+  renderGiftRedeemPage, renderGiftRedeemCheck, renderGiftRedeemShort, renderGiftRedeemDone, renderGiftRedeemProblem,
+  renderGiftRedeemManual, renderGiftRedeemClaimed } from './views.js';
+import { checkGiftCard, redeemForBooking, claimSimpleSpaCard } from './redeem.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(__dirname, '..', 'public');
@@ -174,6 +175,9 @@ const server = createServer(async (req, res) => {
       const body = parseBody(await readBody(req), req.headers['content-type']);
       const c = await checkGiftCard({ bookingId: body.bookingId, code: body.code });
       if (c.ok) return html(res, 200, renderGiftRedeemCheck(c));
+      // A valid card from SimpleSpa's own older system — verified, but it can only be
+      // applied by staff because SimpleSpa exposes no gift-card write endpoint.
+      if (c.reason === 'simplespa_manual') return html(res, 200, renderGiftRedeemManual(c));
       if (c.reason === 'insufficient') return html(res, 200, renderGiftRedeemShort(c));
       if (c.reason === 'booking_not_found') return html(res, 404, 'Booking not found');
       return html(res, 200, renderGiftRedeemProblem(c));
@@ -183,6 +187,12 @@ const server = createServer(async (req, res) => {
       const r = await redeemForBooking({ bookingId: body.bookingId, code: body.code, option: body.option });
       if (r.ok) return html(res, 200, renderGiftRedeemDone(r));
       if (r.reason === 'insufficient') return html(res, 200, renderGiftRedeemShort(r));
+      return html(res, 200, renderGiftRedeemProblem(r));
+    }
+    if (req.method === 'POST' && p === '/pay/gift-card/claim') {
+      const body = parseBody(await readBody(req), req.headers['content-type']);
+      const r = await claimSimpleSpaCard({ bookingId: body.bookingId, code: body.code });
+      if (r.ok) return html(res, 200, renderGiftRedeemClaimed(r));
       return html(res, 200, renderGiftRedeemProblem(r));
     }
     if (req.method === 'POST' && p === '/pay/credit-claim') {

@@ -541,3 +541,49 @@ export function renderGiftRedeemProblem(c) {
       ${b ? `<a class="btnAlt" href="/pay?booking=${encodeURIComponent(b.id)}">Pay another way</a>` : ''}
     </div>`);
 }
+
+// A valid SimpleSpa (legacy) gift card. SimpleSpa has no gift-card write API, so this
+// card can be verified but not deducted automatically — the page must therefore be
+// honest that the team applies it, without making the customer feel their card is in
+// doubt. Their slot IS held either way.
+export function renderGiftRedeemManual(c) {
+  const b = c.booking;
+  const ss = c.ssCard;
+  return shell('Gift card accepted', `
+    <div class="brand"><div class="n">Niobe Beauty</div><div class="t">Gift card</div></div>
+    <div class="card">
+      <div class="tick" style="background:#f4ead9;color:var(--gold-deep);font-size:26px">✓</div>
+      <h2 class="center">Your gift card is valid</h2>
+      <div class="row"><span class="k">Card</span><span class="v">${maskCode(ss.code)}</span></div>
+      <div class="row"><span class="k">Balance</span><span class="v">${GHS(ss.balance)}</span></div>
+      ${ss.expiresAt ? `<div class="row"><span class="k">Valid until</span><span class="v">${String(ss.expiresAt).split(' ')[0]}</span></div>` : ''}
+      ${bookingRows(b)}
+      <div class="row"><span class="k">Total</span><span class="v">${GHS(b.price)}</span></div>
+      <form method="POST" action="/pay/gift-card/claim" style="margin-top:16px">
+        <input type="hidden" name="bookingId" value="${b.id}">
+        <input type="hidden" name="code" value="${ss.code}">
+        <button class="btn" type="submit">Use this card for my booking</button>
+      </form>
+      <div class="note">This is one of our earlier gift cards, which our team applies for you by hand rather than automatically. We'll hold your appointment straight away and the salon will apply the card and confirm — there's nothing else for you to do.</div>
+    </div>`);
+}
+
+// Confirmation after claiming a legacy card. Careful wording: the slot is held and
+// the card is verified, but it has NOT yet been deducted, and saying otherwise would
+// set up a nasty surprise if anything needed sorting out.
+export function renderGiftRedeemClaimed(r) {
+  const b = r.booking;
+  return shell('Appointment held', `
+    <div class="brand"><div class="n">Niobe Beauty</div><div class="t">Gift card</div></div>
+    <div class="card center">
+      <div class="tick">✓</div>
+      <h2>Your appointment is held</h2>
+      <div style="text-align:left;margin-top:8px">
+        ${bookingRows(b)}
+        <div class="row"><span class="k">Gift card</span><span class="v">${maskCode(r.redemption.codeFull || r.redemption.code)}</span></div>
+        <div class="row"><span class="k">Balance on card</span><span class="v">${GHS(r.redemption.balance)}</span></div>
+      </div>
+      <div class="ref">${r.redemption.reference}</div>
+      <div class="note">We've checked your gift card and held your slot. Our team at ${b.branchName || 'the branch'} will apply the card to this booking and confirm it — usually the same day. If anything needs sorting out we'll call you on the number you booked with.</div>
+    </div>`);
+}

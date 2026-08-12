@@ -2,10 +2,11 @@ import { readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { validateCard, redeem } from './giftup.js';
+import { lookupSimpleSpaCard } from './sscards.js';
 import { getBooking } from './bookings.js';
 import { depositOptions, makeReference } from './deposit.js';
 import { confirmAppointment } from './confirm.js';
-import { markSecured } from './holds.js';
+import { markSecured, registerHold } from './holds.js';
 
 // Redeeming an EXISTING gift card against a booking — the other half of the gift-card
 // story. giftup.js already knew how to read and redeem a card; what was missing was a
@@ -84,7 +85,20 @@ export async function checkGiftCard({ bookingId, code }) {
     return { ok: false, reason: 'lookup_failed', booking: b, message: e.message };
   }
 
-  if (!card.found) return { ok: false, reason: 'not_found', booking: b };
+  if (!card.found) {
+    // Not a GiftUp card — before declaring it invalid, check SimpleSpa's own older
+    // gift-card system. Telling a customer their genuine voucher doesn't exist is a
+    // worse failure than the one this whole flow was built to fix.
+    const ss = await lookupSimpleSpaCard(code);
+    if (ss.found) {
+      return {
+        ok: false,
+        reason: ss.valid ? 'simplespa_manual' : (ss.expired ? 'expired' : 'no_balance'),
+        booking: b, ssCard: ss,
+      };
+    }
+    return { ok: false, reason: 'not_found', booking: b };
+  }
   if (card.voided) return { ok: false, reason: 'voided', booking: b, card };
   if (card.expired) return { ok: false, reason: 'expired', booking: b, card };
   if (!card.valid) return { ok: false, reason: 'not_redeemable', booking: b, card };
@@ -205,4 +219,71 @@ export async function redeemForBooking({ bookingId, code, option }) {
   } finally {
     inFlight.delete(key);
   }
+}
+
+// --- SimpleSpa (legacy) gift cards ------------------------------------------
+// These CANNOT be deducted through the API — SimpleSpa exposes no gift-card write
+// endpoint — so this path does the most that can honestly be done automatically:
+// verify the card is real and has the balance, hold the slot so it isn't released
+// while the customer waits, and raise a staff task to apply the card in SimpleSpa.
+//
+// This is deliberately NOT presented to the customer as "paid". It is the same
+// shape as the existing account-credit claim, with one important difference: the
+// balance here has been VERIFIED against SimpleSpa rather than merely claimed by
+// the customer, so staff are confirming a real card, not taking someone's word.
+//
+// The risk this carries, stated plainly because it must not be discovered later:
+// if staff never apply the card in SimpleSpa, the customer keeps their balance AND
+// the slot. That is why every claim is written to a work-list rather than trusted
+// to memory.
+export async function claimSimpleSpaCard({ bookingId, code }) {
+  const key = String(bookingId);
+  const already = existingRedemption(key);
+  if (already) return { ok: true, replay: true, redemption: already, booking: await getBooking(bookingId) };
+
+  const check = await checkGiftCard({ bookingId, code });
+  if (check.reason !== 'simplespa_manual') return { ...check, ok: false };
+
+  const b = check.booking;
+  const ss = check.ssCard;
+  const reference = makeReference(b.branchId);
+
+  const record = {
+    bookingId: b.id,
+    appointment_id: b.appointment_id,
+    branchId: b.branchId,
+    branchName: b.branchName,
+    source: 'simplespa',
+    code: mask(ss.code),
+    // Full code IS kept for this path only, because staff must type it into
+    // SimpleSpa to apply it. It lives in the gitignored data dir alongside the
+    // other customer records, never in a page or a console line.
+    codeFull: ss.code,
+    cardBranch: ss.branchName,
+    balance: ss.balance,
+    expiresAt: ss.expiresAt,
+    customer: b.customer?.name,
+    phone: b.customer?.phone,
+    service: b.service,
+    datetime: b.datetime,
+    price: b.price,
+    reference,
+    manual: true,
+    confirmed: false,
+    at: new Date().toISOString(),
+  };
+  ledger[key] = record;
+  saveLedger();
+
+  // Hold the slot with staffAuth so the release deadline rolls into business hours:
+  // the customer has produced a real card and must not lose the booking while the
+  // desk works through the queue. NOT markSecured — nothing has actually been paid
+  // yet, and treating it as paid would let an unapplied card slip through silently.
+  try { registerHold(b.appointment_id, { branchId: b.branchId, staffAuth: true, reason: 'giftcard_manual_pending' }); } catch { /* never block the customer */ }
+
+  b.status = 'giftcard_claim_pending';
+  recordRedemption(record);
+  console.log(`[gift-redeem] SIMPLESPA card claimed — needs staff to apply it: booking=${b.id} branch=${b.branchName} card=${mask(ss.code)} balance=${ss.balance}`);
+
+  return { ok: true, manual: true, booking: b, redemption: record, ssCard: ss };
 }
