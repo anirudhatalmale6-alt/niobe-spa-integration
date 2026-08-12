@@ -46,12 +46,22 @@ export const normName = (s) => String(s || '').trim().toLowerCase().replace(/\s+
 //     },
 //     "people": [
 //       { "name": "Elizabeth Nubueke", "aliases": ["elizabeth nubuake"],
-//         "commissionPct": 12, "byCategory": { "FACIALS": 15 } }
+//         "commissionPct": 12, "byCategory": { "FACIALS": 15 } },
+//       { "name": "Amelia Nkansah", "former": true, "leftOn": "2026-07-15" }
 //     ],
 //     "exclude": ["niobe el service", "niobe staff 1"]
 //   }
 // aliases carry the alternate spellings; exclude carries the house/front-desk
 // logins that are not people and must never appear on a payroll.
+//
+// `former` marks someone who has left. Deleting a leaver outright would be the
+// obvious move and it is the wrong one: her treatments in the period are real
+// work that was really paid for, so removing her makes the payroll stop
+// reconciling against SimpleSpa's own takings, and quietly drops any commission
+// she is still owed for the days she worked. So she is kept, computed, and
+// reported in her OWN section — never mixed into the pay run, never dropped
+// from the evidence. `leftOn` additionally lets us check for work booked under
+// her login AFTER she left, which is how a reused login shows itself.
 //
 // Niobe described the rate as varying by experience AND by type of service, so
 // rather than pick one, the rate is resolved most-specific-first and each layer
@@ -67,6 +77,10 @@ export function loadStaffMap(file = STAFF_MAP_FILE) {
       name: p.name,
       commissionPct: p.commissionPct == null ? null : Number(p.commissionPct),
       byCategory: normaliseRates(p.byCategory),
+      // A leaving date on its own implies "former" — nobody should have to
+      // remember to set both, and forgetting the flag would pay a leaver.
+      former: !!p.former || !!p.leftOn,
+      leftOn: p.leftOn || null,
     };
     byName.set(normName(p.name), person);
     for (const a of p.aliases || []) byName.set(normName(a), person);
@@ -158,6 +172,7 @@ export async function fetchAppointments(branch, start, end) {
 // and any therapist the staff map didn't recognise.
 export async function runPayroll({ start, end, staffMap = loadStaffMap(), branches = BRANCHES } = {}) {
   const people = new Map();     // canonical person name -> row
+  const formerPeople = new Map(); // same, for staff who have left — reported, never paid
   const unmatched = new Map();  // normalised name -> { name, branches:Set, treatments, value }
   const skipped = {};           // status label -> count
   const branchErrors = [];
@@ -213,7 +228,11 @@ export async function runPayroll({ start, end, staffMap = loadStaffMap(), branch
         continue;
       }
 
-      const row = people.get(person.name) || {
+      // A leaver's work is computed exactly like anyone else's, into a separate
+      // ledger. Same maths, different destination — so her figures are there to
+      // settle if she is owed them, without her ever landing in the pay run.
+      const target = person.former ? formerPeople : people;
+      const row = target.get(person.name) || {
         name: person.name,
         treatments: 0,
         serviceValue: 0,
@@ -222,9 +241,15 @@ export async function runPayroll({ start, end, staffMap = loadStaffMap(), branch
         byCategory: {},
         services: {},
         unratedValue: 0,
+        leftOn: person.leftOn,
+        afterLeaving: 0,
       };
       row.treatments += 1;
       row.serviceValue += price;
+      // Treatments logged under a leaver's login after her last day mean the
+      // login is still in use by somebody — that misattributes real work, and
+      // it is invisible unless something looks for it.
+      if (person.leftOn && String(appt.start).slice(0, 10) > person.leftOn) row.afterLeaving += 1;
 
       // Commission is worked out per treatment at that treatment's own rate, then
       // summed — NOT a single rate applied to the month's total, which would be
@@ -248,11 +273,11 @@ export async function runPayroll({ start, end, staffMap = loadStaffMap(), branch
       row.byCategory[category] = c;
 
       row.services[serviceName] = (row.services[serviceName] || 0) + 1;
-      people.set(person.name, row);
+      target.set(person.name, row);
     }
   }
 
-  const rows = [...people.values()].map((r) => ({
+  const shape = (map) => [...map.values()].map((r) => ({
     ...r,
     serviceValue: round2(r.serviceValue),
     commission: round2(r.commission),
@@ -266,6 +291,9 @@ export async function runPayroll({ start, end, staffMap = loadStaffMap(), branch
       Object.entries(r.byCategory).map(([k, v]) => [k, { ...v, value: round2(v.value), commission: round2(v.commission) }]),
     ),
   })).sort((a, b) => b.serviceValue - a.serviceValue);
+
+  const rows = shape(people);
+  const formerStaff = shape(formerPeople);
 
   return {
     period: { start, end },
@@ -282,6 +310,9 @@ export async function runPayroll({ start, end, staffMap = loadStaffMap(), branch
     missingRates: [...missingRateFor.entries()]
       .map(([k, treatments]) => ({ who: k, treatments }))
       .sort((a, b) => b.treatments - a.treatments),
+    // Staff who have left but did paid work in the period. Deliberately OUTSIDE
+    // totals — this is a decision to make, not a figure to pay automatically.
+    formerStaff,
     // Everything below is why the number can be trusted, not decoration.
     unmatchedStaff: [...unmatched.values()]
       .map((u) => ({ ...u, branches: [...u.branches], value: round2(u.value) }))

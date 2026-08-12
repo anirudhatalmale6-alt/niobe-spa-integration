@@ -102,7 +102,25 @@ if (r.unpricedTreatments) {
   out.push(line(['Treatments whose service has no price in the menu', r.unpricedTreatments,
     'these earn nothing until a price is supplied']));
 }
+// Leavers are shown, never summed into the total above. Someone has to decide
+// whether commission is still owed for the days they worked; the one thing that
+// must not happen is the decision being made by omission.
+if (r.formerStaff.length) {
+  out.push([]);
+  out.push(line(['LEFT THE BUSINESS — decide before paying, NOT included in the total above']));
+  out.push(line(['Therapist', 'Left on', 'Treatments', 'Service value (GHS)', 'Commission if owed (GHS)', 'Branches worked']));
+  for (const f of r.formerStaff) {
+    out.push(line([
+      f.name, f.leftOn || 'date not given', f.treatments,
+      f.serviceValue.toFixed(2), f.commission.toFixed(2), Object.keys(f.byBranch).join(' / '),
+    ]));
+    if (f.afterLeaving) {
+      out.push(line(['  CHECK', `${f.afterLeaving} treatment(s) dated AFTER her last day — her SimpleSpa login is still being used, so this work belongs to somebody else`]));
+    }
+  }
+}
 if (r.unmatchedStaff.length) {
+  out.push([]);
   out.push(line(['Therapists NOT on the confirmed staff list — not paid below']));
   for (const u of r.unmatchedStaff) {
     out.push(line(['  unrecognised', u.name, u.branches.join(' / '), `${u.treatments} treatment(s)`, u.value.toFixed(2)]));
