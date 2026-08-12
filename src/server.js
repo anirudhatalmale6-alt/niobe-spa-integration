@@ -161,6 +161,10 @@ const server = createServer(async (req, res) => {
     // abandoned harmlessly like an unpaid checkout, so the customer sees the
     // numbers before anything moves.
     if (req.method === 'GET' && p === '/pay/gift-card') {
+      // Without a GiftUp key there is nothing to validate a code against, so send
+      // the customer back to the working payment options rather than into a form
+      // that can only ever fail.
+      if (!CONFIG.giftupKey) return redirect(res, `/pay?booking=${encodeURIComponent(url.searchParams.get('booking') || '')}`);
       const bd = await bookingDeposit(url.searchParams.get('booking'));
       if (!bd) return html(res, 404, 'Booking not found');
       if (bd.exempt) return html(res, 200, renderPayPage(bd));

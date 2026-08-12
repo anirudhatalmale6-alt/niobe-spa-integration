@@ -83,7 +83,7 @@ export function renderPayPage(bd) {
         ${CONFIG.intlCurrency ? `<button class="btnAlt" type="submit" name="gateway" value="international">Paying from abroad? Pay in ${CONFIG.intlCurrency}</button>` : ''}
       </form>
       <div class="sep">Already have a gift card or credit?</div>
-      <a class="btnAlt" href="/pay/gift-card?booking=${encodeURIComponent(b.id)}">🎁 Redeem a Niobe gift card</a>
+      ${CONFIG.giftupKey ? `<a class="btnAlt" href="/pay/gift-card?booking=${encodeURIComponent(b.id)}">🎁 Redeem a Niobe gift card</a>` : ''}
       <form method="POST" action="/pay/credit-claim" style="margin-top:2px">
         <input type="hidden" name="bookingId" value="${b.id}">
         <button class="btnAlt" type="submit">I'm paying with my Niobe account credit</button>
