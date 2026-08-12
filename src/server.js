@@ -11,7 +11,9 @@ import { sweepAll, sweepBranchReport, listHolds, startSweepLoop, secureAndConfir
 import { getCatalog } from './giftup.js';
 import { verifyWebhookSignature, parseWebhookEvent, displayName as gatewayName } from './gateway.js';
 import { noteReturn as noteExpressPayReturn } from './expresspay.js';
-import { renderPayPage, renderCheckout, renderSuccess, renderPhoneEntry, renderChooser, renderNoMatch, renderCreditClaim, renderGiftCardPage, renderGiftCheckout, renderGiftCardSuccess, renderGiftCardPending } from './views.js';
+import { renderPayPage, renderCheckout, renderSuccess, renderPhoneEntry, renderChooser, renderNoMatch, renderCreditClaim, renderGiftCardPage, renderGiftCheckout, renderGiftCardSuccess, renderGiftCardPending,
+  renderGiftRedeemPage, renderGiftRedeemCheck, renderGiftRedeemShort, renderGiftRedeemDone, renderGiftRedeemProblem } from './views.js';
+import { checkGiftCard, redeemForBooking } from './redeem.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(__dirname, '..', 'public');
@@ -152,6 +154,32 @@ const server = createServer(async (req, res) => {
       const body = parseBody(await readBody(req), req.headers['content-type']);
       const { authorization_url } = await startDeposit(body.bookingId, body.option, body.gateway);
       return redirect(res, authorization_url);
+    }
+    // --- Redeem an EXISTING gift card against a booking ---
+    // Three steps on purpose: enter the code, see the balance and what it covers,
+    // then confirm. A redemption permanently deducts real value and cannot be
+    // abandoned harmlessly like an unpaid checkout, so the customer sees the
+    // numbers before anything moves.
+    if (req.method === 'GET' && p === '/pay/gift-card') {
+      const bd = await bookingDeposit(url.searchParams.get('booking'));
+      if (!bd) return html(res, 404, 'Booking not found');
+      if (bd.exempt) return html(res, 200, renderPayPage(bd));
+      return html(res, 200, renderGiftRedeemPage(bd));
+    }
+    if (req.method === 'POST' && p === '/pay/gift-card/check') {
+      const body = parseBody(await readBody(req), req.headers['content-type']);
+      const c = await checkGiftCard({ bookingId: body.bookingId, code: body.code });
+      if (c.ok) return html(res, 200, renderGiftRedeemCheck(c));
+      if (c.reason === 'insufficient') return html(res, 200, renderGiftRedeemShort(c));
+      if (c.reason === 'booking_not_found') return html(res, 404, 'Booking not found');
+      return html(res, 200, renderGiftRedeemProblem(c));
+    }
+    if (req.method === 'POST' && p === '/pay/gift-card/redeem') {
+      const body = parseBody(await readBody(req), req.headers['content-type']);
+      const r = await redeemForBooking({ bookingId: body.bookingId, code: body.code, option: body.option });
+      if (r.ok) return html(res, 200, renderGiftRedeemDone(r));
+      if (r.reason === 'insufficient') return html(res, 200, renderGiftRedeemShort(r));
+      return html(res, 200, renderGiftRedeemProblem(r));
     }
     if (req.method === 'POST' && p === '/pay/credit-claim') {
       const body = parseBody(await readBody(req), req.headers['content-type']);

@@ -33,7 +33,7 @@ const shell = (title, body, tag = CONFIG.paymentDemo ? `${GATEWAY} Test Mode` : 
     padding:14px;font-size:15px;font-weight:600;cursor:pointer;text-decoration:none;margin-top:6px}
   .btn:hover{background:#7a5c33}
   .btnAlt{display:block;width:100%;text-align:center;background:transparent;color:var(--gold-deep);border:1.5px solid var(--gold);
-    border-radius:12px;padding:11px;font-size:13px;font-weight:600;cursor:pointer;margin-top:9px}
+    border-radius:12px;padding:11px;font-size:13px;font-weight:600;cursor:pointer;margin-top:9px;text-decoration:none}
   .btnAlt:hover{background:#f7efe3}
   .note{font-size:12px;color:var(--muted);text-align:center;margin-top:14px;line-height:1.5}
   .tick{width:64px;height:64px;border-radius:50%;background:#e9f3ec;color:var(--ok);display:flex;align-items:center;
@@ -43,6 +43,8 @@ const shell = (title, body, tag = CONFIG.paymentDemo ? `${GATEWAY} Test Mode` : 
   .badge{display:inline-block;font-size:11px;color:var(--gold-deep);background:#f4ead9;border:1px solid #ecdcbf;
     padding:2px 9px;border-radius:20px;margin-left:6px}
   .center{text-align:center}
+  .sep{display:flex;align-items:center;gap:10px;margin:16px 0 4px;color:var(--muted);font-size:12px}
+  .sep:before,.sep:after{content:"";flex:1;height:1px;background:var(--line)}
   .demoTag{position:fixed;top:10px;right:12px;font-size:11px;color:#7a5c25;background:#fbf4e8;border:1px solid #ecdcbf;padding:3px 9px;border-radius:20px}
 </style></head><body>${tag ? `<div class="demoTag">${tag}</div>` : ''}
 <div class="wrap">${body}</div></body></html>`;
@@ -80,6 +82,8 @@ export function renderPayPage(bd) {
         ${backup ? `<button class="btnAlt" type="submit" name="gateway" value="${backup}">Having trouble? Pay with ${displayNameOf(backup)} instead</button>` : ''}
         ${CONFIG.intlCurrency ? `<button class="btnAlt" type="submit" name="gateway" value="international">Paying from abroad? Pay in ${CONFIG.intlCurrency}</button>` : ''}
       </form>
+      <div class="sep">Already have a gift card or credit?</div>
+      <a class="btnAlt" href="/pay/gift-card?booking=${encodeURIComponent(b.id)}">🎁 Redeem a Niobe gift card</a>
       <form method="POST" action="/pay/credit-claim" style="margin-top:2px">
         <input type="hidden" name="bookingId" value="${b.id}">
         <button class="btnAlt" type="submit">I'm paying with my Niobe account credit</button>
@@ -394,5 +398,146 @@ export function renderSuccess(result) {
         ${statusLine}
       </div>
       <div class="note">${note}</div>
+    </div>`);
+}
+
+// --- Gift-card REDEMPTION (customer arriving with a card, not buying one) ----
+// Niobe's report was that customers holding a gift card didn't know where to click.
+// The fix is two-fold: a visible button on the pay page, and these pages — which
+// state the balance and exactly what it covers BEFORE anything is deducted, because
+// a redemption cannot be undone by the customer walking away the way an unpaid
+// checkout can.
+// A gift-card code is a bearer instrument — whoever reads it can spend it. Shown
+// masked on screen so a code isn't exposed over someone's shoulder or in a
+// screenshot sent to the salon. (Kept local rather than imported from redeem.js so
+// the view layer stays free of the redemption module's dependencies.)
+const maskCode = (code) => {
+  const c = String(code || '').trim();
+  return c.length <= 4 ? '••••' : `${'•'.repeat(Math.max(4, c.length - 4))}${c.slice(-4)}`;
+};
+
+const bookingRows = (b) => `
+  ${b.service ? `<div class="row"><span class="k">Service</span><span class="v">${b.service}</span></div>` : ''}
+  ${b.branchName ? `<div class="row"><span class="k">Branch</span><span class="v">${b.branchName}</span></div>` : ''}
+  ${b.datetime ? `<div class="row"><span class="k">Date &amp; time</span><span class="v">${b.datetime}</span></div>` : ''}`;
+
+export function renderGiftRedeemPage(bd, note) {
+  const b = bd.booking;
+  return shell('Use your gift card', `
+    <div class="brand"><div class="n">Niobe Beauty</div><div class="t">Use your gift card</div></div>
+    <div class="card">
+      <h2 style="margin-top:2px">Enter your gift card code</h2>
+      ${note ? `<div class="note" style="color:#a4442f;text-align:left;margin:0 0 12px">${note}</div>` : ''}
+      <div style="margin-bottom:14px">${bookingRows(b)}
+        <div class="row"><span class="k">Total</span><span class="v">${GHS(bd.price)}</span></div></div>
+      <form method="POST" action="/pay/gift-card/check">
+        <input type="hidden" name="bookingId" value="${b.id}">
+        <input name="code" required autocomplete="off" autocapitalize="characters" spellcheck="false"
+          placeholder="e.g. ABCD-1234-EFGH"
+          style="width:100%;padding:14px;border:1.5px solid var(--line);border-radius:12px;font-size:16px;
+                 font-family:ui-monospace,Menlo,monospace;text-align:center;letter-spacing:1px">
+        <button class="btn" type="submit">Check my gift card</button>
+      </form>
+      <div class="note">We'll show you the balance and what it covers before anything is deducted. It's on the voucher email you received.</div>
+    </div>`);
+}
+
+// The balance page. Deliberately shows what will be deducted and what will be left,
+// so pressing the button holds no surprises.
+export function renderGiftRedeemCheck(c) {
+  const b = c.booking;
+  const opts = c.options.map((o) => `
+    <label class="opt">
+      <span><input type="radio" name="option" value="${o.id}" ${o.id === c.options[0].id ? 'checked' : ''} style="margin-right:10px">
+        <span class="lab">${o.label}</span><br>
+        <span class="sub">${o.id === 'full' ? 'Nothing left to pay on the day' : 'Secure your slot now, pay the rest at your visit'}</span></span>
+      <span class="amt">${GHS(o.amount)}</span>
+    </label>`).join('');
+  return shell('Your gift card', `
+    <div class="brand"><div class="n">Niobe Beauty</div><div class="t">Your gift card</div></div>
+    <div class="card">
+      <div class="tick" style="background:#f4ead9;color:var(--gold-deep);font-size:26px">✓</div>
+      <h2 class="center">Gift card accepted</h2>
+      <div class="row"><span class="k">Card</span><span class="v">${c.card.code ? maskCode(c.card.code) : 'Your card'}</span></div>
+      <div class="row"><span class="k">Balance available</span><span class="v">${c.balance == null ? 'Full value' : GHS(c.balance)}</span></div>
+      ${bookingRows(b)}
+      <div class="row"><span class="k">Total</span><span class="v">${GHS(c.price)}</span></div>
+      <h2 style="margin-top:18px">How much would you like to use?</h2>
+      <form method="POST" action="/pay/gift-card/redeem">
+        <input type="hidden" name="bookingId" value="${b.id}">
+        <input type="hidden" name="code" value="${c.card.code || ''}">
+        ${opts}
+        <button class="btn" type="submit">Use my gift card &amp; confirm booking</button>
+      </form>
+      <div class="note">The amount you choose is deducted from your gift card and your appointment is confirmed straight away. Any remaining balance stays on the card for next time.</div>
+    </div>`);
+}
+
+// Shown when the card is real but can't cover the booking. We deliberately do NOT
+// part-redeem: draining the card and still leaving the slot unsecured is the worst
+// outcome for the customer, since a redemption is not reversible the way an
+// abandoned checkout is. Instead we send them to normal payment with the card intact.
+export function renderGiftRedeemShort(c) {
+  const b = c.booking;
+  return shell('Gift card balance is short', `
+    <div class="brand"><div class="n">Niobe Beauty</div><div class="t">Gift card</div></div>
+    <div class="card">
+      <h2 style="margin-top:2px">Your card doesn't quite cover this booking</h2>
+      <div class="row"><span class="k">Balance on card</span><span class="v">${c.balance == null ? 'Unknown' : GHS(c.balance)}</span></div>
+      <div class="row"><span class="k">Needed to secure</span><span class="v">${GHS(c.needed)}</span></div>
+      <div class="row"><span class="k">Short by</span><span class="v">${GHS(c.shortfall)}</span></div>
+      <div class="note" style="text-align:left">
+        We haven't touched your gift card — the balance is exactly as it was. You can secure this
+        booking by paying online below, and still use your gift card towards the balance when you
+        come in. Or call us and we'll happily sort it out with you.
+      </div>
+      <a class="btn" href="/pay?booking=${encodeURIComponent(b.id)}">Pay online instead</a>
+    </div>`);
+}
+
+export function renderGiftRedeemDone(r) {
+  const b = r.booking;
+  const rem = r.remainingCredit;
+  return shell('Booking confirmed', `
+    <div class="brand"><div class="n">Niobe Beauty</div><div class="t">Booking confirmed</div></div>
+    <div class="card center">
+      <div class="tick">✓</div>
+      <h2>${r.confirm?.confirmed ? 'Your appointment is confirmed' : 'Gift card accepted'}</h2>
+      <div style="text-align:left;margin-top:8px">
+        ${bookingRows(b)}
+        <div class="row"><span class="k">Paid by gift card</span><span class="v">${GHS(r.redemption.amount)}</span></div>
+        ${rem != null ? `<div class="row"><span class="k">Left on your card</span><span class="v">${GHS(rem)}</span></div>` : ''}
+        ${r.paidInFull ? '' : `<div class="row"><span class="k">To pay at your visit</span><span class="v">${GHS(Math.max(0, (b.price || 0) - r.redemption.amount))}</span></div>`}
+      </div>
+      <div class="ref">${r.redemption.reference}</div>
+      <div class="note">${r.confirm?.confirmed
+        ? 'Your slot is secured and confirmed. We look forward to seeing you!'
+        : 'Your gift card has been accepted and your slot is secured. Our team will finish confirming it shortly — there is nothing more you need to do.'}
+        ${rem ? '<br>Your remaining balance stays on the same card for next time.' : ''}</div>
+    </div>`);
+}
+
+// Card genuinely unusable — say which, in words a customer can act on.
+export function renderGiftRedeemProblem(c) {
+  const b = c.booking;
+  const msg = {
+    not_found: 'We couldn\'t find that gift card code. Please check the code on your voucher email and try again — it\'s easy to mistype.',
+    expired: 'This gift card has passed its expiry date, so it can\'t be used online. Please give us a call — we\'ll see what we can do for you.',
+    voided: 'This gift card is no longer active. Please give us a call and we\'ll look into it for you.',
+    not_redeemable: 'This gift card can\'t be redeemed at the moment. Please give us a call and we\'ll sort it out.',
+    already_redeemed: 'This booking has already been paid with a gift card, so there\'s nothing more to pay. If that doesn\'t look right, please contact us.',
+    lookup_failed: 'We couldn\'t check your gift card just now — that\'s our side, not your card. Please try again in a moment.',
+    redeem_failed: 'We couldn\'t complete the redemption just now. Nothing has been taken off your gift card. Please try again in a moment.',
+    in_progress: 'We\'re already processing this gift card — please wait a few seconds and refresh rather than pressing again.',
+  }[c.reason] || 'We couldn\'t use that gift card. Please give us a call and we\'ll help.';
+  const retry = ['not_found', 'lookup_failed', 'redeem_failed'].includes(c.reason);
+  return shell('Gift card', `
+    <div class="brand"><div class="n">Niobe Beauty</div><div class="t">Gift card</div></div>
+    <div class="card">
+      <h2 style="margin-top:2px">${c.reason === 'already_redeemed' ? 'Already paid' : 'We couldn\'t use that card'}</h2>
+      <div class="note" style="text-align:left;margin-top:0">${msg}</div>
+      ${b ? `<div style="margin-top:12px">${bookingRows(b)}</div>` : ''}
+      ${retry && b ? `<a class="btn" href="/pay/gift-card?booking=${encodeURIComponent(b.id)}">Try again</a>` : ''}
+      ${b ? `<a class="btnAlt" href="/pay?booking=${encodeURIComponent(b.id)}">Pay another way</a>` : ''}
     </div>`);
 }

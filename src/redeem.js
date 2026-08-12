@@ -1,0 +1,208 @@
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import { validateCard, redeem } from './giftup.js';
+import { getBooking } from './bookings.js';
+import { depositOptions, makeReference } from './deposit.js';
+import { confirmAppointment } from './confirm.js';
+import { markSecured } from './holds.js';
+
+// Redeeming an EXISTING gift card against a booking — the other half of the gift-card
+// story. giftup.js already knew how to read and redeem a card; what was missing was a
+// route a customer could actually reach, which is why holders of a card were pressing
+// "I'm paying with account credit" (wrong queue, manual staff work) or giving up.
+//
+// The money-losing failure this module is built around: a gift card is real value, and
+// a redemption is not a card authorisation that can simply be voided by walking away.
+// If we deduct from the card and then fail to secure the slot, the customer has paid
+// and has no booking — and unlike a card payment there is no automatic reversal. So the
+// order of operations is deliberate throughout and the balance is NEVER touched until
+// we know the redemption can cover what the booking needs.
+
+const DATA_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
+const LEDGER_FILE = join(DATA_DIR, 'gift-redemptions.json');
+
+// Persisted so a restart between redeeming and the customer refreshing can't cause a
+// second deduction from the same card. This is the same class of bug as the in-memory
+// hold registry and the in-memory notify set: state that guards a real-world side
+// effect cannot live only in the process.
+let ledger = {};   // bookingId -> record
+function loadLedger() {
+  try {
+    const raw = JSON.parse(readFileSync(LEDGER_FILE, 'utf8'));
+    if (raw && typeof raw === 'object') ledger = raw;
+  } catch { ledger = {}; }
+}
+function saveLedger() {
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    writeFileSync(LEDGER_FILE, JSON.stringify(ledger, null, 1));
+  } catch (e) {
+    // If we cannot persist we must say so loudly: an unrecorded redemption is money
+    // taken off a card with nothing durable tying it to a booking.
+    console.log(`[gift-redeem] WARNING could not persist ledger: ${e.message}`);
+  }
+}
+loadLedger();
+
+function recordRedemption(entry) {
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    appendFileSync(join(DATA_DIR, 'gift-redemptions.log'), JSON.stringify(entry) + '\n');
+  } catch { /* logging must never break the customer flow */ }
+  if (!entry.confirmed) {
+    console.log(`[gift-redeem] REDEEMED but NOT auto-confirmed (${entry.reason || ''}): booking=${entry.bookingId} appt=${entry.appointment_id} card=${mask(entry.code)} amount=${entry.amount}`);
+  }
+}
+
+// Never write a full gift-card code to a log or a page — it is a bearer instrument.
+// Anyone who reads it can spend it.
+export const mask = (code) => {
+  const c = String(code || '').trim();
+  return c.length <= 4 ? '••••' : `${'•'.repeat(Math.max(4, c.length - 4))}${c.slice(-4)}`;
+};
+
+export function existingRedemption(bookingId) { return ledger[String(bookingId)] || null; }
+
+// --- Step 1: read the card ---------------------------------------------------
+// Pure lookup, no money moves. Tells the customer in plain terms whether the card
+// works and what it covers, which is what Niobe asked for ("read unexpired gift
+// cards and confirm").
+export async function checkGiftCard({ bookingId, code }) {
+  const b = await getBooking(bookingId);
+  if (!b) return { ok: false, reason: 'booking_not_found' };
+
+  const already = existingRedemption(bookingId);
+  if (already) return { ok: false, reason: 'already_redeemed', booking: b, redemption: already };
+
+  let card;
+  try {
+    card = await validateCard(code);
+  } catch (e) {
+    // A GiftUp outage must not read as "your card is invalid" — the customer would
+    // reasonably conclude their gift is worthless and give up on the booking.
+    return { ok: false, reason: 'lookup_failed', booking: b, message: e.message };
+  }
+
+  if (!card.found) return { ok: false, reason: 'not_found', booking: b };
+  if (card.voided) return { ok: false, reason: 'voided', booking: b, card };
+  if (card.expired) return { ok: false, reason: 'expired', booking: b, card };
+  if (!card.valid) return { ok: false, reason: 'not_redeemable', booking: b, card };
+
+  const opts = depositOptions(b.price, { giftCardOrCredit: false, requireFull: b.requireFull });
+  const balance = card.balance == null ? Infinity : card.balance;
+  // Which of the normal pay options this card can actually cover in full. We only
+  // ever offer an option the balance covers outright — see redeemForBooking for why
+  // a part-payment is deliberately not offered here.
+  const affordable = opts.options.filter((o) => balance + 0.001 >= o.amount);
+  const cheapest = opts.options.reduce((a, o) => (o.amount < a.amount ? o : a), opts.options[0]);
+
+  return {
+    ok: affordable.length > 0,
+    reason: affordable.length ? 'ok' : 'insufficient',
+    booking: b,
+    card,
+    balance: card.balance,
+    price: opts.price,
+    options: affordable,
+    // What they'd need for the smallest option, so the shortfall message is concrete
+    // rather than "insufficient balance".
+    needed: cheapest?.amount ?? opts.price,
+    shortfall: Math.max(0, Math.round(((cheapest?.amount ?? opts.price) - balance) * 100) / 100),
+  };
+}
+
+// --- Step 2: redeem and secure ----------------------------------------------
+// In-flight guard: a customer double-clicking "Confirm" fires two concurrent POSTs,
+// and the persisted ledger alone can't stop the second one because neither has
+// finished writing yet. Cheap, and the window it closes is a real double deduction.
+const inFlight = new Set();
+
+export async function redeemForBooking({ bookingId, code, option }) {
+  const key = String(bookingId);
+
+  const already = existingRedemption(key);
+  if (already) return { ok: true, replay: true, redemption: already, booking: await getBooking(bookingId) };
+  if (inFlight.has(key)) return { ok: false, reason: 'in_progress' };
+
+  inFlight.add(key);
+  try {
+    // Re-check rather than trusting what the browser posted back: the balance can
+    // have moved since the check page was rendered (the same card used at a branch
+    // in the meantime), and the amount must never come from the client.
+    const check = await checkGiftCard({ bookingId, code });
+    if (!check.ok) return { ...check, ok: false };
+
+    const chosen = check.options.find((o) => o.id === option) || check.options[0];
+    if (!chosen) return { ok: false, reason: 'insufficient', ...check };
+
+    const b = check.booking;
+    const reference = makeReference(b.branchId);
+
+    // MONEY MOVES HERE. Everything after this point must be failure-tolerant: the
+    // customer has now genuinely paid.
+    let r;
+    try {
+      r = await redeem(code, chosen.amount, {
+        reference,
+        reason: `Niobe booking ${b.id} — ${b.service}`,
+        metadata: { bookingId: b.id, appointment_id: b.appointment_id, branchId: b.branchId },
+      });
+    } catch (e) {
+      // Nothing was deducted, so this is still a clean failure the customer can retry.
+      return { ok: false, reason: 'redeem_failed', message: e.message, booking: b, card: check.card };
+    }
+
+    // Persist the redemption BEFORE anything else that could throw. If the process
+    // died on the next line, this record is what proves the card was spent on this
+    // booking. Written first, deliberately.
+    const record = {
+      bookingId: b.id,
+      appointment_id: b.appointment_id,
+      branchId: b.branchId,
+      branchName: b.branchName,
+      code: mask(code),
+      amount: chosen.amount,
+      optionId: chosen.id,
+      reference,
+      transactionId: r.transactionId,
+      remainingCredit: r.remainingCredit,
+      at: new Date().toISOString(),
+    };
+    ledger[key] = record;
+    saveLedger();
+
+    // Secure the slot before attempting the SimpleSpa write, so a confirm failure
+    // can never let the release sweep cancel a booking that has been paid for.
+    try { markSecured(b.appointment_id, `giftcard_ref:${reference}`); } catch { /* never block on this */ }
+
+    let confirm;
+    try {
+      confirm = await confirmAppointment(b.branchId, b.appointment_id, reference);
+    } catch (e) {
+      confirm = { confirmed: false, pending: true, reason: e.message };
+    }
+
+    b.status = confirm.confirmed ? 'confirmed' : 'paid_pending_confirm';
+    b.paidAmount = chosen.amount;
+    b.paymentReference = reference;
+    b.giftCard = { code: mask(code), amount: chosen.amount, transactionId: r.transactionId };
+
+    record.confirmed = !!confirm.confirmed;
+    record.reason = confirm.error || confirm.reason;
+    ledger[key] = record;
+    saveLedger();
+    recordRedemption(record);
+
+    return {
+      ok: true,
+      booking: b,
+      redemption: record,
+      confirm,
+      remainingCredit: r.remainingCredit,
+      paidInFull: chosen.id === 'full',
+    };
+  } finally {
+    inFlight.delete(key);
+  }
+}
