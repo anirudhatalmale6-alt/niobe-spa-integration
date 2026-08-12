@@ -529,6 +529,7 @@ export function renderGiftRedeemProblem(c) {
     lookup_failed: 'We couldn\'t check your gift card just now — that\'s our side, not your card. Please try again in a moment.',
     redeem_failed: 'We couldn\'t complete the redemption just now. Nothing has been taken off your gift card. Please try again in a moment.',
     in_progress: 'We\'re already processing this gift card — please wait a few seconds and refresh rather than pressing again.',
+    already_used_in_branch: 'Our records show this gift card has already been used at one of our branches, so there\'s no balance left on it to apply. If you believe that\'s wrong, please give us a call with the card to hand and we\'ll check it for you straight away.',
   }[c.reason] || 'We couldn\'t use that gift card. Please give us a call and we\'ll help.';
   const retry = ['not_found', 'lookup_failed', 'redeem_failed'].includes(c.reason);
   return shell('Gift card', `

@@ -103,8 +103,33 @@ export async function checkGiftCard({ bookingId, code }) {
   if (card.expired) return { ok: false, reason: 'expired', booking: b, card };
   if (!card.valid) return { ok: false, reason: 'not_redeemable', booking: b, card };
 
+  // CROSS-LEDGER SAFETY CHECK.
+  //
+  // Niobe mirror most GiftUp cards into SimpleSpa under the SAME code so branch staff
+  // can see them and sell paid extensions. That means one card has TWO independent
+  // balances, and spending it in one place does not reduce the other. Measured on live
+  // data: 86 of 100 GiftUp cards also existed in SimpleSpa, and 8 had already diverged
+  // — SimpleSpa at 0.00 (spent at the till) while GiftUp still showed the full value.
+  //
+  // Redeeming on the GiftUp figure alone would therefore let an already-spent card be
+  // spent a second time online. So we take the LOWER of the two balances. That is
+  // correct in both directions: spend at the till and SimpleSpa is lower; spend online
+  // and GiftUp is lower. It can only ever be conservative, never generous.
+  let mirror = null;
+  try {
+    mirror = await lookupSimpleSpaCard(code);
+  } catch { /* a mirror lookup failure must not block a valid GiftUp card */ }
+
+  const guBalance = card.balance == null ? Infinity : card.balance;
+  const mirrored = mirror?.found ? Number(mirror.balance) : null;
+  const balance = mirrored != null ? Math.min(guBalance, mirrored) : guBalance;
+
+  // Fully spent on the SimpleSpa side => the value is gone, whatever GiftUp says.
+  if (mirrored != null && mirrored <= 0) {
+    return { ok: false, reason: 'already_used_in_branch', booking: b, card, ssCard: mirror };
+  }
+
   const opts = depositOptions(b.price, { giftCardOrCredit: false, requireFull: b.requireFull });
-  const balance = card.balance == null ? Infinity : card.balance;
   // Which of the normal pay options this card can actually cover in full. We only
   // ever offer an option the balance covers outright — see redeemForBooking for why
   // a part-payment is deliberately not offered here.
@@ -116,7 +141,12 @@ export async function checkGiftCard({ bookingId, code }) {
     reason: affordable.length ? 'ok' : 'insufficient',
     booking: b,
     card,
-    balance: card.balance,
+    // The figure we will actually honour — the lower of the two ledgers.
+    balance,
+    giftupBalance: card.balance,
+    mirrorBalance: mirrored,
+    // True when the two ledgers disagree; recorded so reconciliation has a trail.
+    diverged: mirrored != null && Math.abs(mirrored - guBalance) > 0.009,
     price: opts.price,
     options: affordable,
     // What they'd need for the smallest option, so the shortfall message is concrete
@@ -181,6 +211,10 @@ export async function redeemForBooking({ bookingId, code, option }) {
       reference,
       transactionId: r.transactionId,
       remainingCredit: r.remainingCredit,
+      // Recorded so a later reconciliation can see the card also lives in SimpleSpa
+      // and by how much the two ledgers disagreed at the moment it was spent.
+      mirrorBalance: check.mirrorBalance ?? null,
+      diverged: !!check.diverged,
       at: new Date().toISOString(),
     };
     ledger[key] = record;
