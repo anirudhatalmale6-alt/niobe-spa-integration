@@ -75,11 +75,36 @@ function routeFor({ branchId, reference }) {
   return { merchantId: CONFIG.expresspayMerchantId, apiKey: CONFIG.expresspayApiKey };
 }
 
+// expressPay authenticates on the api-key ALONE and ignores the merchant-id we send.
+// Proven live 2026-08-16: East Legon's merchant-id posted with Community 18's key came
+// back status 1 "Success" naming Community 18, and the reverse pair named East Legon.
+// So a single mis-paired line in .env silently settles a branch's takings into another
+// branch's bank account, with no error anywhere to notice it by. The response does say
+// which account it actually used, so check it and refuse the checkout if it is not ours.
+function assertSettlesWhereAddressed(json, route) {
+  const actual = String(json['merchantservice-srvrtid'] || '');
+  if (!actual || actual === String(route.merchantId)) return; // absent = nothing to check
+  throw new Error(
+    `expressPay credential mismatch: addressed merchant ${route.merchantId} but the key ` +
+    `belongs to ${actual} (${json['merchant-name'] || 'unknown'}). Money would settle into ` +
+    `the wrong branch — fix the *_EXPRESSPAY_MERCHANT_ID / *_EXPRESSPAY_API_KEY pair.`,
+  );
+}
+
 export async function initializeTransaction({ email, amount, reference, metadata, callbackUrl }) {
   if (CONFIG.paymentDemo) {
     rememberToken(reference, `demo-${reference}`);
     const url = `${CONFIG.publicUrl}/demo/checkout?reference=${encodeURIComponent(reference)}`;
     return { authorization_url: url, reference, demo: true };
+  }
+
+  // Real booking + sandbox endpoint is the one combination that must never run: the
+  // customer completes a test checkout, pays nothing, and the booking confirms anyway.
+  // EXPRESSPAY_BASE defaults to sandbox, so an unset .env is enough to cause it.
+  // Deliberate sandbox testing sets EXPRESSPAY_ALLOW_SANDBOX=true; forgetting to
+  // configure the live endpoint does not, which is the whole point of the opt-in.
+  if (/sandbox/i.test(CONFIG.expresspayBase) && !CONFIG.expresspayAllowSandbox) {
+    throw new Error('expressPay is pointed at the sandbox — refusing to take a real payment. Set EXPRESSPAY_BASE=https://expresspaygh.com/api');
   }
 
   const route = routeFor({ branchId: metadata?.branchId });
@@ -105,6 +130,7 @@ export async function initializeTransaction({ email, amount, reference, metadata
   if (Number(json.status) !== 1 || !json.token) {
     throw new Error(json['result-text'] || json.message || 'expressPay submit failed');
   }
+  assertSettlesWhereAddressed(json, route);
   rememberToken(reference, json.token);
   return { authorization_url: `${CONFIG.expresspayBase}/checkout.php?token=${encodeURIComponent(json.token)}`, reference };
 }

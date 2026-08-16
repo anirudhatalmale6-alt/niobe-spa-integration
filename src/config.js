@@ -101,6 +101,9 @@ export const CONFIG = {
   expresspayApiKey: process.env.EXPRESSPAY_API_KEY || '',
   // sandbox for test, https://expresspaygh.com/api for live
   expresspayBase: process.env.EXPRESSPAY_BASE || 'https://sandbox.expresspaygh.com/api',
+  // Taking a real deposit through the sandbox confirms a booking nobody paid for, so
+  // the adapter refuses that combination unless testing has explicitly asked for it.
+  expresspayAllowSandbox: process.env.EXPRESSPAY_ALLOW_SANDBOX === 'true',
 
   // International rail (Option A) — foreign card charge in this currency, settled to the UK account.
   intlCurrency: (process.env.INTL_CURRENCY || 'GBP').toUpperCase(),

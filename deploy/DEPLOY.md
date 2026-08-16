@@ -55,6 +55,19 @@ HUBTEL_MERCHANT_ACCOUNT=<hubtel-collection-account-no>   # note: no leading zero
 # expressPay (backup) — requires this server's IP whitelisted in the expressPay dashboard
 PAYMENT_GATEWAY_BACKUP=expresspay
 EXPRESSPAY_MERCHANT_ID=... EXPRESSPAY_API_KEY=... EXPRESSPAY_BASE=https://expresspaygh.com/api
+# Per branch, so each branch's deposits settle into its own account. BOTH values or
+# neither — a branch missing either one falls back to the central account.
+{EAST_LEGON,CANTONMENTS,AFRICAN_REGENT,HFC_C18,ALISA_HOTEL}_EXPRESSPAY_MERCHANT_ID=...
+{EAST_LEGON,CANTONMENTS,AFRICAN_REGENT,HFC_C18,ALISA_HOTEL}_EXPRESSPAY_API_KEY=...
+#
+# WARNING: expressPay authenticates on the api-key ALONE and ignores the merchant-id
+# it is sent. A key paired with the wrong branch's merchant-id is accepted with
+# status 1 "Success" and settles that branch's money into the key owner's account.
+# After editing any *_EXPRESSPAY_* line, run this ON THIS SERVER (it is IP-gated):
+#     node scripts/check-expresspay-accounts.mjs
+# EXPRESSPAY_BASE defaults to the SANDBOX. Real deposits through the sandbox confirm
+# bookings nobody paid for, so the adapter refuses to run unless the live base is set
+# (override for testing only with EXPRESSPAY_ALLOW_SANDBOX=true).
 
 # No-show engine (secure-or-release). Deploy in REPORT-ONLY first: it runs the
 # sweep and shows candidates on /holds.html but writes NOTHING to SimpleSpa until
