@@ -23,6 +23,10 @@ const rows = BRANCHES
   .filter((b) => b.expresspayMerchantId && b.expresspayApiKey)
   .map((b) => ({ label: b.name, merchantId: b.expresspayMerchantId, apiKey: b.expresspayApiKey }));
 
+if (CONFIG.expresspayGiftcardMerchantId && CONFIG.expresspayGiftcardApiKey) {
+  rows.push({ label: 'gift cards', merchantId: CONFIG.expresspayGiftcardMerchantId, apiKey: CONFIG.expresspayGiftcardApiKey });
+}
+
 if (CONFIG.expresspayMerchantId && CONFIG.expresspayApiKey) {
   rows.push({ label: 'central (fallback)', merchantId: CONFIG.expresspayMerchantId, apiKey: CONFIG.expresspayApiKey });
 }

@@ -65,7 +65,16 @@ function form(params) {
 // recovers the branch from the code the reference carries (NIOBE-<BR4>-…). Both paths
 // MUST land on the same account — a payment taken by a branch but queried against the
 // central account reads back as unknown, and the booking would never auto-confirm.
-function routeFor({ branchId, reference }) {
+function routeFor({ branchId, reference, type }) {
+  // Gift cards belong to no branch, so before 2026-08-17 they fell through to the central
+  // account by accident of having no branchId. Route them explicitly instead: initiate
+  // knows from metadata.type, the query only has the reference — and makeGiftRef writes
+  // NIOBE-GC-…, so the code is 'GC'. Both paths must pick the same account or a paid gift
+  // card reads back as unknown and never issues.
+  const isGiftCard = type === 'giftcard' || String(reference || '').split('-')[1] === 'GC';
+  if (isGiftCard && CONFIG.expresspayGiftcardMerchantId && CONFIG.expresspayGiftcardApiKey) {
+    return { merchantId: CONFIG.expresspayGiftcardMerchantId, apiKey: CONFIG.expresspayGiftcardApiKey };
+  }
   const branch = branchId
     ? branchById(branchId)
     : branchByRefCode(String(reference || '').split('-')[1]);
@@ -107,7 +116,7 @@ export async function initializeTransaction({ email, amount, reference, metadata
     throw new Error('expressPay is pointed at the sandbox — refusing to take a real payment. Set EXPRESSPAY_BASE=https://expresspaygh.com/api');
   }
 
-  const route = routeFor({ branchId: metadata?.branchId });
+  const route = routeFor({ branchId: metadata?.branchId, type: metadata?.type, reference });
   const [firstname, ...rest] = String(metadata?.customerName || 'Niobe Customer').split(' ');
   const res = await fetch(`${CONFIG.expresspayBase}/submit.php`, {
     method: 'POST',

@@ -99,6 +99,13 @@ export const CONFIG = {
   // expressPay credentials (from the expressPay merchant dashboard)
   expresspayMerchantId: process.env.EXPRESSPAY_MERCHANT_ID || '',
   expresspayApiKey: process.env.EXPRESSPAY_API_KEY || '',
+  // Gift cards settle into their OWN expressPay account ("Niobe Gift Card Purchases"),
+  // kept deliberately separate from the central fallback above. If it were the fallback,
+  // a branch that ever lost its own credentials would quietly pay treatment deposits into
+  // the gift-card account — money in the wrong ledger, found only at reconciliation.
+  // Separate means a mis-configured branch simply offers no expressPay and uses Hubtel.
+  expresspayGiftcardMerchantId: process.env.GIFTCARD_EXPRESSPAY_MERCHANT_ID || '',
+  expresspayGiftcardApiKey: process.env.GIFTCARD_EXPRESSPAY_API_KEY || '',
   // sandbox for test, https://expresspaygh.com/api for live
   expresspayBase: process.env.EXPRESSPAY_BASE || 'https://sandbox.expresspaygh.com/api',
   // Taking a real deposit through the sandbox confirms a booking nobody paid for, so
