@@ -48,6 +48,11 @@
   .bs{font-size:12px;padding:3px 10px;border-radius:20px;border:1px solid var(--line);background:#fff;color:var(--ink)}
   .bs .d{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px}
   .bs.ok .d{background:var(--ok)} .bs.err .d{background:var(--out)}
+  .dlgroup{display:flex;gap:8px;align-items:center;margin-left:auto}
+  .btn{background:var(--gold);color:#2b2320;font-weight:600;font-size:14px;text-decoration:none;
+       padding:9px 16px;border-radius:9px;border:1px solid var(--gold-deep);white-space:nowrap}
+  .btn:hover{background:var(--gold-deep);color:#fff}
+  .chk{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:5px;white-space:nowrap}
   .nav{margin-top:10px;display:flex;gap:8px}
   .nav a{font-size:13px;color:#e7d7c1;text-decoration:none;padding:5px 12px;border-radius:20px;border:1px solid #55463c}
   .nav a.active{background:var(--gold);color:#2b2320;border-color:var(--gold);font-weight:600}
@@ -88,6 +93,11 @@
       <option value="low">Low at a branch</option>
       <option value="out">Out at a branch</option>
     </select>
+    <span class="dlgroup">
+      <select id="dlbranch" title="What to download"><option value="">All branches side by side</option></select>
+      <label class="chk" id="zerowrap" style="display:none"><input type="checkbox" id="dlzero" /> skip zero lines</label>
+      <a id="dl" class="btn" href="#">Download for stock take</a>
+    </span>
   </div>
 
   <div class="card">
@@ -151,6 +161,21 @@ function render(){
   }).join('') || `<tr><td colspan="99" style="padding:26px;text-align:center;color:#8b7d73">No products match your filters.</td></tr>`;
 
   $('#foot').textContent = `${rows.length} of ${DATA.products.length} products · generated ${new Date(DATA.generatedAt).toLocaleString()}`;
+
+  // The download must be the rows on screen, not the whole catalogue — otherwise
+  // someone filters to "low at a branch", downloads, and gets everything.
+  const p = new URLSearchParams();
+  const br = $('#dlbranch').value;
+  if(br) p.set('branch', br);
+  if(q) p.set('q', $('#q').value.trim());
+  if(cat) p.set('cat', cat);
+  if(avail) p.set('avail', avail);
+  if(br && $('#dlzero').checked) p.set('zero','0');
+  $('#dl').href = '/api/stock.csv' + (p.toString() ? '?'+p : '');
+  // Skipping zero lines only means anything for a single branch: across all branches a
+  // row is a product, and it is in stock somewhere.
+  $('#zerowrap').style.display = br ? 'flex' : 'none';
+  $('#dl').textContent = br ? 'Download stock take' : 'Download all branches';
 }
 
 async function load(){
@@ -168,7 +193,10 @@ async function load(){
   $('#branchstat').innerHTML = DATA.branches.map(b=>
     `<span class="bs ${b.ok?'ok':'err'}"><span class="d"></span>${b.name}${b.ok?'':' — '+(b.error||'unavailable')}</span>`).join('');
 
-  ['#q','#cat','#avail'].forEach(s=>$(s).addEventListener('input',render));
+  $('#dlbranch').insertAdjacentHTML('beforeend',
+    DATA.branches.map(b=>`<option value="${b.id}">${b.name} — stock take sheet</option>`).join(''));
+
+  ['#q','#cat','#avail','#dlbranch','#dlzero'].forEach(s=>$(s).addEventListener('input',render));
   render();
 }
 load();

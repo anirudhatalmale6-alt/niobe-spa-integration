@@ -3,7 +3,7 @@ import { readFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname, join, extname } from 'path';
 import { CONFIG, branchById } from './config.js';
-import { getConsolidatedStock } from './stock.js';
+import { getConsolidatedStock, stockCsv, stockCsvFilename } from './stock.js';
 import { getUnifiedAvailability, listServiceNames } from './availability.js';
 import { getBooking, bookingDeposit, startDeposit, finalizeDeposit, listBookings, getPayment, lookupBookings, claimAccountCredit } from './bookings.js';
 import { startPurchase, finalizePurchase, getPurchase } from './giftcards.js';
@@ -79,6 +79,27 @@ const server = createServer(async (req, res) => {
     // --- JSON API ---
     if (req.method === 'GET' && p === '/api/health') return json(res, 200, { ok: true, demoMode: CONFIG.demoMode, gateway: gatewayName, paymentDemo: CONFIG.paymentDemo });
     if (req.method === 'GET' && p === '/api/stock') return json(res, 200, await getConsolidatedStock());
+    // Stock-take download. ?branch=<id> gives one branch's counting sheet, no branch
+    // gives every branch side by side. The other params mirror the dashboard filters so
+    // the file matches what the person was looking at when they pressed Download.
+    if (req.method === 'GET' && p === '/api/stock.csv') {
+      const q = url.searchParams;
+      const data = await getConsolidatedStock();
+      const branchId = q.get('branch') || '';
+      const csv = stockCsv(data, {
+        branchId,
+        category: q.get('cat') || '',
+        search: q.get('q') || '',
+        availability: q.get('avail') || '',
+        includeZero: q.get('zero') !== '0',
+      });
+      res.writeHead(200, {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${stockCsvFilename(data, branchId)}"`,
+        'Cache-Control': 'no-store',
+      });
+      return res.end(csv);
+    }
     if (req.method === 'GET' && p === '/api/bookings') return json(res, 200, listBookings());
     if (req.method === 'GET' && p === '/api/services') return json(res, 200, await listServiceNames());
     if (req.method === 'GET' && p === '/api/availability') {

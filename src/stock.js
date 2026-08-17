@@ -99,3 +99,100 @@ export async function getConsolidatedStock() {
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// CSV export — a stocktake sheet staff can open in Excel and count against.
+// ---------------------------------------------------------------------------
+
+// A cell beginning = + - @ is executed as a formula by Excel/Sheets when the file is
+// opened. Product names come from the SimpleSpa dashboard, so a name someone typed as
+// "-Elemis sample" would run as one. Prefix those with an apostrophe: Excel shows the
+// text and never evaluates it. Numbers we generate ourselves are exempt.
+function csvCell(value) {
+  let s = value === null || value === undefined ? '' : String(value);
+  if (/^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s)) s = `'${s}`;
+  return `"${s.replace(/"/g, '""')}"`;
+}
+const csvRow = (cells) => cells.map(csvCell).join(',');
+
+// Reconciliation must show the SIGNED figure. The dashboard shows an oversold branch as
+// 0 because nothing is sellable, but a stocktake needs to see "the system thinks -3" —
+// that discrepancy is the entire reason someone is counting the shelf.
+export function stockCsv(data, { branchId = '', category = '', search = '', availability = '', includeZero = true } = {}) {
+  const branch = data.branches.find((b) => b.id === branchId) || null;
+  const q = String(search || '').trim().toLowerCase();
+
+  let rows = data.products.filter((p) => {
+    if (category && p.label !== category) return false;
+    if (availability === 'low' && !p.anyLow) return false;
+    if (availability === 'out' && !p.anyOut) return false;
+    if (q && !(p.name.toLowerCase().includes(q) || (p.sku || '').toLowerCase().includes(q))) return false;
+    return true;
+  });
+
+  // A single-branch sheet listing 100 lines of zero for a branch that stocks four items
+  // is why people give up on the export, so a branch sheet can drop the lines it does
+  // not carry. "Carries none of it" and "carries it, counted zero" are the same row here
+  // — SimpleSpa shares one catalogue across branches, so absence is only ever a 0.
+  if (branch && !includeZero) rows = rows.filter((p) => (p.byBranch[branch.id]?.raw ?? 0) !== 0);
+
+  const stamp = data.generatedAt;
+  const lines = [];
+
+  if (branch) {
+    lines.push(csvRow([`Niobe Beauty — stock take — ${branch.name}`]));
+    lines.push(csvRow([`Generated ${stamp} · figures are live from SimpleSpa at that moment`]));
+    lines.push(csvRow(['Fill in the Counted column from the shelf; Difference = Counted minus System qty.']));
+    lines.push('');
+    lines.push(csvRow(['SKU', 'Product', 'Category', 'Unit price (GHS)', 'System qty', 'Stock value (GHS)', 'Counted', 'Difference', 'Notes']));
+    let units = 0;
+    let value = 0;
+    for (const p of rows) {
+      const raw = p.byBranch[branch.id]?.raw ?? 0;
+      units += raw;
+      value += raw * (Number(p.price) || 0);
+      lines.push(csvRow([
+        p.sku || '', p.name, p.label,
+        (Number(p.price) || 0).toFixed(2),
+        raw,
+        (raw * (Number(p.price) || 0)).toFixed(2),
+        '', '',
+        raw < 0 ? `OVERSOLD by ${-raw} — system has sold more than it recorded receiving` : '',
+      ]));
+    }
+    lines.push('');
+    lines.push(csvRow(['', `TOTAL — ${rows.length} products`, '', '', units, value.toFixed(2), '', '', '']));
+  } else {
+    lines.push(csvRow(['Niobe Beauty — stock, all branches']));
+    lines.push(csvRow([`Generated ${stamp} · figures are live from SimpleSpa at that moment`]));
+    lines.push('');
+    lines.push(csvRow([
+      'SKU', 'Product', 'Category', 'Unit price (GHS)',
+      ...data.branches.map((b) => b.name),
+      'Total units', 'Total value (GHS)',
+    ]));
+    for (const p of rows) {
+      const price = Number(p.price) || 0;
+      const per = data.branches.map((b) => p.byBranch[b.id]?.raw ?? 0);
+      const total = per.reduce((s, n) => s + n, 0);
+      lines.push(csvRow([p.sku || '', p.name, p.label, price.toFixed(2), ...per, total, (total * price).toFixed(2)]));
+    }
+  }
+
+  // A branch that failed to answer contributes zeros that look exactly like real zeros,
+  // so say so in the file itself — the person reconciling may never see the dashboard.
+  const down = data.branches.filter((b) => !b.ok);
+  if (down.length) {
+    lines.push('');
+    lines.push(csvRow([`WARNING: no data from ${down.map((b) => `${b.name} (${b.error || 'unavailable'})`).join('; ')} — their figures below/above read as 0 but are UNKNOWN.`]));
+  }
+
+  // BOM so Excel reads it as UTF-8, CRLF because that is what Excel writes.
+  return `﻿${lines.join('\r\n')}\r\n`;
+}
+
+export function stockCsvFilename(data, branchId) {
+  const branch = data.branches.find((b) => b.id === branchId);
+  const day = data.generatedAt.slice(0, 10);
+  return `niobe-stock-${branch ? branch.id : 'all-branches'}-${day}.csv`;
+}
