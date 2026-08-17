@@ -92,6 +92,7 @@ Open http://localhost:3000
 | Endpoint | Description |
 | --- | --- |
 | `GET /api/stock` | Consolidated cross-branch catalogue (JSON). |
+| `GET /api/stock.csv` | Same data as a download. `?branch=<id>` gives that branch a stock-take sheet (signed quantities + blank Counted/Difference columns); no `branch` gives every branch side by side. `?cat=`/`?q=`/`?avail=` mirror the dashboard filters, `?zero=0` drops lines a branch holds none of. |
 | `GET /api/health` | Health check. |
 
 ## Notes
