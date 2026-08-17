@@ -189,17 +189,24 @@ export function stockCsv(data, { branchId = '', category = '', search = '', avai
     // The columns are headed the way the branches say them, so spell them out once here
     // rather than leave anyone guessing what AR or C18 refers to.
     lines.push(csvRow([`Branch columns: ${data.branches.map((b) => (b.short === b.name ? b.name : `${b.short} = ${b.name}`)).join(' · ')}`]));
+    lines.push(csvRow(['Each branch has a blank "counted" column beside its figure — write the shelf count there. A branch only fills in its own two columns.']));
     lines.push('');
+    // Counted sits immediately beside its own branch, not in a block at the end, so the
+    // pair being compared is always adjacent and a branch can work down two columns.
     lines.push(csvRow([
       'SKU', 'Product', 'Category', 'Unit price (GHS)',
-      ...data.branches.map((b) => b.short),
+      ...data.branches.flatMap((b) => [b.short, `${b.short} counted`]),
       'Total units', 'Total value (GHS)',
     ]));
     for (const p of rows) {
       const price = Number(p.price) || 0;
       const per = data.branches.map((b) => p.byBranch[b.id]?.raw ?? 0);
       const total = per.reduce((s, n) => s + n, 0);
-      lines.push(csvRow([p.sku || '', p.name, p.label, price.toFixed(2), ...per, total, (total * price).toFixed(2)]));
+      lines.push(csvRow([
+        p.sku || '', p.name, p.label, price.toFixed(2),
+        ...per.flatMap((n) => [n, '']),
+        total, (total * price).toFixed(2),
+      ]));
     }
   }
 
