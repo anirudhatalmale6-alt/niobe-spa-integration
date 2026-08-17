@@ -24,9 +24,14 @@ async function collect() {
 // Build the consolidated cross-branch catalogue.
 export async function getConsolidatedStock() {
   const perBranch = await collect();
-  const branchStatus = perBranch.map(({ branch, ok, error }) => ({
-    id: branch.id, name: branch.name, ok, error: error || null,
-  }));
+  // Stock views read in selling order — the branches that actually move product first,
+  // the two hotel sites last — so the Monday cross-check starts where the numbers are.
+  const branchStatus = perBranch
+    .map(({ branch, ok, error }) => ({
+      id: branch.id, name: branch.name, short: branch.short || branch.name,
+      stockOrder: branch.stockOrder ?? 99, ok, error: error || null,
+    }))
+    .sort((a, b) => a.stockOrder - b.stockOrder);
 
   const map = new Map();
   for (const { branch, products } of perBranch) {
@@ -165,10 +170,13 @@ export function stockCsv(data, { branchId = '', category = '', search = '', avai
   } else {
     lines.push(csvRow(['Niobe Beauty — stock, all branches']));
     lines.push(csvRow([`Generated ${stamp} · figures are live from SimpleSpa at that moment`]));
+    // The columns are headed the way the branches say them, so spell them out once here
+    // rather than leave anyone guessing what AR or C18 refers to.
+    lines.push(csvRow([`Branch columns: ${data.branches.map((b) => (b.short === b.name ? b.name : `${b.short} = ${b.name}`)).join(' · ')}`]));
     lines.push('');
     lines.push(csvRow([
       'SKU', 'Product', 'Category', 'Unit price (GHS)',
-      ...data.branches.map((b) => b.name),
+      ...data.branches.map((b) => b.short),
       'Total units', 'Total value (GHS)',
     ]));
     for (const p of rows) {
