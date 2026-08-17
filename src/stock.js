@@ -3,8 +3,18 @@ import { fetchBranchProducts } from './simplespa.js';
 import { mockBranchProducts } from './mockData.js';
 
 const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
-// Group products across branches by SKU when present, else by normalised name.
-const groupKey = (p) => (p.sku && p.sku.trim()) ? `sku:${norm(p.sku)}` : `name:${norm(p.name)}`;
+// Group the same product across branches. product_id FIRST: SimpleSpa issues one id per
+// product and repeats it at every branch, so it is the real identity.
+//
+// SKU is not. Two different Elemis products were found sharing barcode 641628007257
+// (DYNAMIC RESURFACING GEL MASK and TRI-ENZYME RESURFACING GEL MASK) and two more
+// sharing 641628601875 — somebody reused a barcode when adding the replacement product.
+// Keyed on SKU those pairs merged into one row: the row kept the first product's name
+// and the second product's quantities, so a branch holding 2 of one of them showed 0.
+// Fall back to SKU, then name, only for rows with no product_id.
+const groupKey = (p) => (p.product_id ? `id:${p.product_id}`
+  : (p.sku && p.sku.trim()) ? `sku:${norm(p.sku)}`
+  : `name:${norm(p.name)}`);
 
 // Fetch every branch in parallel; never let one failing branch sink the whole view.
 async function collect() {
@@ -55,9 +65,15 @@ export async function getConsolidatedStock() {
       // availability is 0. Keep the raw figure so staff can see/reconcile the oversold amount,
       // but never let a negative count inflate (understate) the sellable total.
       const raw = Math.trunc(Number(p.stock)) || 0;
-      const qty = Math.max(0, raw);
-      row.byBranch[branch.id] = { qty, raw, oversold: raw < 0, product_id: p.product_id };
-      row.total += qty;
+      // If a branch ever lands two rows on one key, ADD them. Assigning would drop the
+      // first while the total still counted it, and a total that disagrees with the
+      // columns beside it is exactly what makes people stop trusting a stock sheet.
+      const prev = row.byBranch[branch.id];
+      const branchRaw = (prev?.raw || 0) + raw;
+      row.byBranch[branch.id] = {
+        qty: Math.max(0, branchRaw), raw: branchRaw, oversold: branchRaw < 0, product_id: p.product_id,
+      };
+      row.total += Math.max(0, branchRaw) - (prev?.qty || 0);
       // Prefer a populated image / real price if the first branch lacked it.
       if (!row.image_url && p.image_url) row.image_url = p.image_url;
       if (!row.price && p.price) row.price = Number(p.price);
