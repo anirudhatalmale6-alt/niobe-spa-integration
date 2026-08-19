@@ -200,6 +200,9 @@ export async function getIntlPayments({ includeUnpaid = false } = {}) {
     generatedAt: new Date().toISOString(),
     currency: CONFIG.intlCurrency || 'GBP',
     fxBufferPct: CONFIG.fxBufferPct,
+    // The charge is buffer PLUS a flat uplift; a page that explains the pricing has to name
+    // both parts or it is describing a formula the numbers do not follow.
+    fxFixedUplift: Number(CONFIG.fxFixedUplift) || 0,
     liveRate,
     truncated,
     abandonedCheckouts: abandoned,
@@ -233,7 +236,8 @@ export function intlPaymentsCsv(data) {
   lines.push(csvRow([`Generated ${data.generatedAt} · read live from Stripe`]));
   lines.push(csvRow([`"Cedis credited" is the amount quoted to the customer when they paid — credit that figure, not a fresh conversion of the ${cur}.`]));
   lines.push(csvRow([`Stripe fee and net ${cur} are what Niobe actually receives. "Break-even rate" is the GHS per ${cur} the transfer to Ghana must achieve for the payment to cover its cedi value.`]));
-  if (data.liveRate) lines.push(csvRow([`Today's mid-market rate: 1 ${cur} = ${round2(data.liveRate)} GHS · FX buffer charged at checkout: ${data.fxBufferPct}%`]));
+  if (data.liveRate) lines.push(csvRow([`Today's mid-market rate: 1 ${cur} = ${round2(data.liveRate)} GHS · charged at checkout with a ${data.fxBufferPct}% buffer${data.fxFixedUplift ? ` plus a flat ${cur} ${data.fxFixedUplift.toFixed(2)}` : ''}`]));
+  lines.push(csvRow(['The mid-market rate is what Google shows. It is not what a transfer into Ghana actually achieves — the provider takes a margin off it, which is what the headroom column is there to pay for.']));
   lines.push('');
 
   lines.push(csvRow([

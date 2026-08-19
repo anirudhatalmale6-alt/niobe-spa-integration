@@ -97,6 +97,7 @@ function render(d) {
     + '<a class="btn" href="/api/intl-payments.csv">Download for Excel</a>'
     + '<span class="mut">Live rate today: 1 ' + cur + ' = GHS ' + (d.liveRate ? d.liveRate.toFixed(2) : '—')
     + ' · charged with a ' + d.fxBufferPct + '% buffer'
+    + (d.fxFixedUplift ? ' plus a flat ' + cur + ' ' + d.fxFixedUplift.toFixed(2) : '')
     + (d.abandonedCheckouts ? ' · ' + d.abandonedCheckouts + ' checkout(s) started but never paid' : '')
     + '</span></div>';
 
@@ -138,7 +139,9 @@ function render(d) {
     + 'it with today\'s mid-market rate. Positive means the ' + d.fxBufferPct + '% buffer is holding; '
     + 'negative means that payment brought in less than it promised, and the buffer needs raising. '
     + 'Stripe charges roughly 1.5% + 20p on UK cards and 3.25% + 20p on cards issued outside the UK, '
-    + 'so a payment from the United States costs noticeably more than the same amount from London.'
+    + 'so a payment from the United States costs noticeably more than the same amount from London. '
+    + 'Today\'s rate above is the mid-market rate — the one Google shows. No transfer actually achieves it; '
+    + 'the provider takes a margin off it, and the headroom is what pays that margin.'
     + (rows.some(r => r.rateDerived) ? ' <br>* rate reconstructed from the amount charged — payments taken before this report existed did not record it.' : '')
     + '</div>';
 
