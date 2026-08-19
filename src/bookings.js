@@ -288,8 +288,10 @@ export async function startDeposit(bookingId, optionId, preferredGateway) {
     chargeAmount: charge.amount,
     chargeCurrency: charge.currency,
     callbackUrl: `${CONFIG.publicUrl}/pay/callback?reference=${encodeURIComponent(reference)}`,
+    // priceGHS travels with the payment so the gateway can say what the deposit is a deposit
+    // TOWARDS. Without it Stripe can only show a pound figure, which answers nothing.
     metadata: { bookingId: b.id, appointment_id: b.appointment_id, branchId: b.branchId, type: chosen.id,
-      customerName: b.customer.name, customerPhone: b.customer.phone },
+      priceGHS: b.price, customerName: b.customer.name, customerPhone: b.customer.phone },
   }, preferredGateway);
 
   payments.set(reference, { reference, bookingId: b.id, amount: chosen.amount, optionId: chosen.id,

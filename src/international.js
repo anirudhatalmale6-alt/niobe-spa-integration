@@ -1,4 +1,4 @@
-import { CONFIG } from './config.js';
+import { CONFIG, branchById } from './config.js';
 
 // International rail (Option A) — for customers paying from abroad. Charges the deposit in a
 // foreign currency (default GBP) via Stripe Checkout that settles into Niobe's UK account;
@@ -29,10 +29,43 @@ function formEncode(fields) {
     .join('&');
 }
 
+// What a payment is CALLED in Stripe.
+//
+// The branch reads these lines in the Stripe phone app, and the question they were asking of
+// them — "is this the full treatment or only part of it?" — is unanswerable from a pound
+// figure, because the pounds were never the price. So the cedi amount, the treatment it is
+// paying towards, and whether it settles the lot go into the description itself. The answer
+// belongs where the question is being asked, not only in a report they have to go and open.
+function describe({ amountGHS, metadata }) {
+  const ghs = Math.round((Number(amountGHS) || 0) * 100) / 100;
+  const price = Math.round((Number(metadata?.priceGHS) || 0) * 100) / 100;
+  const branch = metadata?.branchId ? (branchById(metadata.branchId)?.name || metadata.branchId) : '';
+  const who = metadata?.customerName || metadata?.buyerName || '';
+
+  if (metadata?.type === 'giftcard') {
+    return {
+      dashboard: `Niobe gift card — GHS ${ghs}${who ? ` — bought by ${who}` : ''}`,
+      customer: `Niobe Beauty gift card (GHS ${ghs})`,
+    };
+  }
+  // Only claim "full" or "part" when the treatment price is actually known. Guessing here would
+  // put a wrong answer in front of the branch with Stripe's authority behind it, which is worse
+  // than the silence it replaces.
+  const settles = price > 0
+    ? (ghs >= price - 0.001 ? `FULL PAYMENT — GHS ${ghs}` : `PART PAYMENT — GHS ${ghs} of GHS ${price}, GHS ${Math.round((price - ghs) * 100) / 100} still to collect`)
+    : `GHS ${ghs}`;
+  return {
+    dashboard: `${settles}${who ? ` — ${who}` : ''}${branch ? ` — ${branch}` : ''}`,
+    customer: price > 0 && ghs < price - 0.001
+      ? `Niobe Beauty — deposit of GHS ${ghs} towards GHS ${price}`
+      : `Niobe Beauty — payment in full (GHS ${ghs})`,
+  };
+}
+
 // Create a Stripe Checkout Session in the foreign currency and return the hosted pay link.
 // In demo mode this points at our own simulated checkout so the full journey (including the
 // cedi-equivalent display) can be exercised without live keys.
-export async function initializeTransaction({ email, reference, chargeAmount, chargeCurrency, metadata, callbackUrl }) {
+export async function initializeTransaction({ email, amount, reference, chargeAmount, chargeCurrency, metadata, callbackUrl }) {
   if (CONFIG.paymentDemo) {
     const url = `${CONFIG.publicUrl}/demo/checkout?reference=${encodeURIComponent(reference)}`;
     return { authorization_url: url, reference, demo: true };
@@ -44,7 +77,7 @@ export async function initializeTransaction({ email, reference, chargeAmount, ch
   const unitAmount = Math.round(Number(chargeAmount) * 100);
   if (!(unitAmount > 0)) throw new Error('Invalid international charge amount');
 
-  const desc = `Niobe Beauty deposit${metadata?.branchId ? ` — ${metadata.branchId}` : ''}`;
+  const desc = describe({ amountGHS: amount, metadata });
   const res = await fetch(`${STRIPE_API}/checkout/sessions`, {
     method: 'POST',
     headers: { 'Authorization': stripeAuth(), 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -58,11 +91,17 @@ export async function initializeTransaction({ email, reference, chargeAmount, ch
       'line_items[0][quantity]': 1,
       'line_items[0][price_data][currency]': currency,
       'line_items[0][price_data][unit_amount]': unitAmount,
-      'line_items[0][price_data][product_data][name]': desc,
+      'line_items[0][price_data][product_data][name]': desc.customer,
       'metadata[reference]': reference,
       'metadata[bookingId]': metadata?.bookingId || '',
       'metadata[branchId]': metadata?.branchId || '',
-      'payment_intent_data[description]': `${desc} (${reference})`,
+      'payment_intent_data[description]': `${desc.dashboard} (${reference})`,
+      // Also as structured metadata, so the cedi figures are filterable in the Stripe dashboard
+      // and readable by anything else that looks at this account later.
+      'metadata[amountGHS]': amount != null ? String(amount) : '',
+      'metadata[priceGHS]': metadata?.priceGHS != null ? String(metadata.priceGHS) : '',
+      'metadata[customerName]': metadata?.customerName || metadata?.buyerName || '',
+      'metadata[paymentType]': metadata?.type || '',
       'payment_intent_data[metadata][reference]': reference,
     }),
   });
@@ -74,8 +113,6 @@ export async function initializeTransaction({ email, reference, chargeAmount, ch
   return { authorization_url: json.url, reference, sessionId: json.id };
 }
 
-// Confirm the payment actually completed by retrieving the Checkout Session from Stripe.
-// This is the source of truth — the browser return and any webhook are only triggers.
 // Find the Checkout Session for one of our references.
 //
 // The map above lives in memory only, so a restart between the customer opening the Stripe page
@@ -106,6 +143,8 @@ async function findSessionId(reference) {
   return null;
 }
 
+// Confirm the payment actually completed by retrieving the Checkout Session from Stripe.
+// This is the source of truth — the browser return and any webhook are only triggers.
 export async function verifyTransaction(reference) {
   if (CONFIG.paymentDemo) return { success: true, reference, amount: null, demo: true };
   const sessionId = await findSessionId(reference);

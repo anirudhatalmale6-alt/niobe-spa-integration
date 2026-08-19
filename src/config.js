@@ -120,6 +120,10 @@ export const CONFIG = {
   intlCurrency: (process.env.INTL_CURRENCY || 'GBP').toUpperCase(),
   // Buffer % applied to the FX-converted charge so conversion/rate movement doesn't leave a shortfall.
   fxBufferPct: Number(process.env.FX_BUFFER_PCT ?? 3),
+  // Flat amount added to a foreign-currency charge, in that currency, on top of the percentage
+  // buffer. Exists because Stripe's per-payment fee is percentage + 20p, and a percentage
+  // buffer alone always under-covers small payments. 0 = off (percentage only).
+  fxFixedUplift: Number(process.env.FX_FIXED_UPLIFT ?? 0),
   stripeUkSecret: process.env.STRIPE_UK_SECRET || '',
 
   // GiftUp gift-card rail — redeem a GiftUp gift card against a booking instead of a cash deposit.

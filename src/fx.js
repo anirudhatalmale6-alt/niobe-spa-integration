@@ -25,5 +25,17 @@ export async function convertFromGHS(amountGHS, currency, bufferPct = CONFIG.fxB
   const rate = await ghsPerUnit(currency);
   const raw = Number(amountGHS) / rate;
   const buffered = raw * (1 + (Number(bufferPct) || 0) / 100);
-  return { amount: Math.ceil(buffered * 100) / 100, currency, rate };
+  // A percentage buffer cannot cover a FIXED cost. Stripe charges a percentage PLUS 20p per
+  // payment, and on a small payment those 20p are a large share of it — at a 7% buffer a
+  // GHS 105 gift card keeps only 0.7% for the transfer home, while a GHS 500 deposit keeps
+  // 2.9%. FX_FIXED_UPLIFT adds a flat amount in the charge currency so the percentage is left
+  // doing only the job it can actually do. Defaults to 0: nothing changes unless it is set.
+  const withFixed = buffered + (Number(CONFIG.fxFixedUplift) || 0);
+  return {
+    amount: Math.ceil(withFixed * 100) / 100,
+    currency,
+    rate,
+    bufferPct: Number(bufferPct) || 0,
+    fixedUplift: Number(CONFIG.fxFixedUplift) || 0,
+  };
 }
