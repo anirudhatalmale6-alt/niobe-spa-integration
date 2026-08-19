@@ -33,6 +33,13 @@ certbot --nginx -d pay.niobebeauty.com --redirect -m <admin-email> --agree-tos -
 
 Certbot rewrites the Nginx config to serve 443 with a Let's Encrypt cert and auto-renews.
 
+## 3b. Protect the staff pages
+
+`/holds.html`, `/desk/*`, `/abroad.html` and `/api/intl-payments*` are served through nginx
+Basic Auth (`/etc/nginx/.niobe_htpasswd`). `/abroad.html` shows customer names, email
+addresses and payment amounts, so it must never be added to the site without its
+`auth_basic` block — the app itself does no authentication.
+
 ## 4. Configure `.env`
 Edit `/opt/niobe-integration/.env` (chmod 600, owned by `niobe`). Production values:
 

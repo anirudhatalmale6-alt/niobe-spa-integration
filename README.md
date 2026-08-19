@@ -93,6 +93,9 @@ Open http://localhost:3000
 | --- | --- |
 | `GET /api/stock` | Consolidated cross-branch catalogue (JSON). |
 | `GET /api/stock.csv` | Same data as a download. `?branch=<id>` gives that branch a stock-take sheet (signed quantities + blank Counted/Difference columns); no `branch` gives every branch side by side. `?cat=`/`?q=`/`?avail=` mirror the dashboard filters, `?zero=0` drops lines a branch holds none of. |
+| `GET /api/intl-payments` | Payments taken from abroad, reconciled against Stripe. Built from Stripe outward, so a payment that reached Stripe but never returned to this service appears as a flagged row rather than not at all. Each row carries the cedis credited, what is still owed, the FX rate used at the time, Stripe's fee, the net actually received, and the GHS/GBP the transfer to Ghana must achieve to break even. `?all=1` also lists abandoned checkouts. |
+| `GET /api/intl-payments.csv` | The same, as an Excel-ready download. |
+| `GET /abroad.html` | Staff page for the above. Behind the same nginx Basic Auth as `/holds.html` — it carries customer names, emails and money. |
 | `GET /api/health` | Health check. |
 
 ## Notes
