@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join, extname } from 'path';
 import { CONFIG, branchById } from './config.js';
 import { getConsolidatedStock, stockCsv, stockCsvFilename } from './stock.js';
+import { getIntlPayments, intlPaymentsCsv, intlPaymentsCsvFilename } from './intlpay.js';
 import { getUnifiedAvailability, listServiceNames } from './availability.js';
 import { getBooking, bookingDeposit, startDeposit, finalizeDeposit, listBookings, getPayment, lookupBookings, claimAccountCredit } from './bookings.js';
 import { startPurchase, finalizePurchase, getPurchase } from './giftcards.js';
@@ -100,6 +101,19 @@ const server = createServer(async (req, res) => {
       });
       return res.end(csv);
     }
+    // Payments taken from abroad, reconciled against Stripe itself. Behind the staff login at
+    // nginx (customer names, emails and money), same as /holds.html.
+    if (req.method === 'GET' && (p === '/api/intl-payments' || p === '/api/intl-payments.csv')) {
+      const data = await getIntlPayments({ includeUnpaid: url.searchParams.get('all') === '1' });
+      if (p === '/api/intl-payments') return json(res, 200, data);
+      res.writeHead(200, {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${intlPaymentsCsvFilename(data)}"`,
+        'Cache-Control': 'no-store',
+      });
+      return res.end(intlPaymentsCsv(data));
+    }
+
     if (req.method === 'GET' && p === '/api/bookings') return json(res, 200, listBookings());
     if (req.method === 'GET' && p === '/api/services') return json(res, 200, await listServiceNames());
     if (req.method === 'GET' && p === '/api/availability') {

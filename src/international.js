@@ -76,9 +76,39 @@ export async function initializeTransaction({ email, reference, chargeAmount, ch
 
 // Confirm the payment actually completed by retrieving the Checkout Session from Stripe.
 // This is the source of truth — the browser return and any webhook are only triggers.
+// Find the Checkout Session for one of our references.
+//
+// The map above lives in memory only, so a restart between the customer opening the Stripe page
+// and returning from it leaves no session id for a payment that has genuinely been made — and
+// this service restarts on every deploy, while a Stripe checkout stays open for 24 hours. That
+// window used to end with a customer who has paid being told the payment could not be verified.
+// Stripe knows perfectly well which session carries our reference: ask it, rather than treating
+// our own forgetfulness as evidence that no money arrived.
+async function findSessionId(reference) {
+  const known = sessionByRef.get(reference);
+  if (known) return known;
+  let startingAfter = null;
+  for (let page = 0; page < 3; page += 1) {
+    const qs = new URLSearchParams({ limit: '100' });
+    if (startingAfter) qs.set('starting_after', startingAfter);
+    const res = await fetch(`${STRIPE_API}/checkout/sessions?${qs}`, { headers: { Authorization: stripeAuth() } });
+    const body = await res.json();
+    if (!res.ok || !body.data?.length) return null;
+    for (const s of body.data) {
+      const ref = s.client_reference_id || s.metadata?.reference;
+      if (ref) sessionByRef.set(ref, s.id);   // warm the cache while we are here
+    }
+    const hit = body.data.find((s) => (s.client_reference_id || s.metadata?.reference) === reference);
+    if (hit) return hit.id;
+    if (!body.has_more) return null;
+    startingAfter = body.data[body.data.length - 1].id;
+  }
+  return null;
+}
+
 export async function verifyTransaction(reference) {
   if (CONFIG.paymentDemo) return { success: true, reference, amount: null, demo: true };
-  const sessionId = sessionByRef.get(reference);
+  const sessionId = await findSessionId(reference);
   if (!sessionId) return { success: false, reference, amount: null, reason: 'no_session_for_reference' };
 
   const res = await fetch(`${STRIPE_API}/checkout/sessions/${encodeURIComponent(sessionId)}`, {

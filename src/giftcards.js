@@ -24,6 +24,21 @@ function recordGiftSale(entry) {
   }
 }
 
+// The money side of a sale, written down with the sale itself. `amount` is the card's FACE
+// value; `payableGHS` is what the buyer actually handed over (face + service fee) and is the
+// figure that has to reconcile against the bank. A buyer abroad pays in pounds, so the rate
+// used at that moment is recorded too — it cannot be recovered later, the rate will have moved.
+const saleFx = (pur) => ({
+  payableGHS: pur.payableGHS ?? null,
+  feeGHS: pur.feeGHS ?? null,
+  surchargePct: pur.surchargePct ?? null,
+  buyerName: pur.buyerName || '',
+  buyerEmail: pur.buyerEmail || '',
+  chargeAmount: pur.chargeAmount ?? null,
+  chargeCurrency: pur.chargeCurrency || 'GHS',
+  chargeRate: pur.chargeRate ?? null,
+});
+
 let seq = 0;
 function makeGiftRef() {
   seq = (seq + 1) % 1000;
@@ -148,12 +163,14 @@ export async function finalizePurchase(reference) {
     pur.orderNumber = order.orderNumber;
     pur.downloadLinks = order.downloadLinks;
     recordGiftSale({ reference, amount: pur.amount, gateway: pur.gateway, issued: true,
-      cards: order.cards, orderNumber: order.orderNumber, at: new Date().toISOString() });
+      cards: order.cards, orderNumber: order.orderNumber, at: new Date().toISOString(),
+      ...saleFx(pur) });
     return { ok: true, purchase: pur, cards: order.cards, orderNumber: order.orderNumber, downloadLinks: order.downloadLinks };
   } catch (e) {
     pur.status = 'paid_pending_issue';
     recordGiftSale({ reference, amount: pur.amount, gateway: pur.gateway, issued: false,
-      reason: e.message, buyerEmail: pur.buyerEmail, recipient: pur.recipient, at: new Date().toISOString() });
+      reason: e.message, buyerEmail: pur.buyerEmail, recipient: pur.recipient, at: new Date().toISOString(),
+      ...saleFx(pur) });
     return { ok: true, purchase: pur, cards: [], pendingIssue: true };
   }
 }

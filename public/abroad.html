@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Niobe Beauty — Payments from abroad</title>
+<style>
+:root{--bg:#f6f1ec;--card:#fffdfb;--line:#e9ddd2;--ink:#2b2320;--mut:#8b7d73;--gold:#b08a54;--good:#2f7d54;--bad:#b1462f}
+*{box-sizing:border-box}
+body{margin:0;font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+header{padding:22px 20px 6px;max-width:1400px;margin:0 auto}
+h1{font-size:21px;margin:0 0 4px}
+.sub{color:var(--mut);font-size:13px;line-height:1.5;max-width:820px}
+main{max-width:1400px;margin:0 auto;padding:14px 20px 60px}
+.cards{display:flex;flex-wrap:wrap;gap:12px;margin:16px 0}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 16px;min-width:150px}
+.kpi .n{font-size:20px;font-weight:600}
+.kpi .l{font-size:12px;color:var(--mut);margin-top:2px}
+.bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:8px 0 16px}
+.btn{background:var(--gold);color:#fff;border:0;border-radius:9px;padding:9px 16px;font-size:14px;text-decoration:none;display:inline-block;cursor:pointer}
+.btn.alt{background:var(--card);color:var(--ink);border:1px solid var(--line)}
+.wrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:12px}
+table{border-collapse:collapse;width:100%;font-size:13px;min-width:1150px}
+th,td{padding:9px 11px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+th{background:#f3ebe3;font-weight:600;font-size:12px;color:#6c5f56;position:sticky;top:0}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+tr:last-child td{border-bottom:0}
+.ghs{font-weight:600}
+.flag{background:#fbeae5;color:var(--bad);border-radius:20px;padding:2px 9px;font-size:11px;font-weight:600}
+.ok{color:var(--good)}
+.warn{background:#fbeae5;border:1px solid #f0cabd;color:#8a3421;border-radius:10px;padding:12px 14px;margin:14px 0;font-size:13px;line-height:1.5}
+.note{background:#fbf4e8;border:1px solid #ecdcbf;border-radius:10px;padding:12px 14px;margin:14px 0;font-size:13px;color:#6b5533;line-height:1.55}
+.mut{color:var(--mut)}
+.loading{padding:40px;text-align:center;color:var(--mut)}
+@media(max-width:640px){h1{font-size:18px}main,header{padding-left:12px;padding-right:12px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Payments from abroad</h1>
+  <div class="sub">Every card payment taken in <span id="cur">GBP</span> through Stripe, matched to the booking it belongs to.
+  Read live from Stripe each time this page loads — Stripe is the record of what actually arrived.</div>
+</header>
+<main>
+  <div id="content" class="loading">Loading from Stripe…</div>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+const n2 = (v) => (v === null || v === undefined || v === '') ? '—' : Number(v).toFixed(2);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+fetch('/api/intl-payments').then(r => r.json()).then(render).catch((e) => {
+  $('#content').innerHTML = '<div class="warn">Could not read from Stripe: ' + esc(e.message) + '</div>';
+});
+
+function render(d) {
+  const cur = d.currency;
+  $('#cur').textContent = cur;
+  const s = d.summary;
+  const rows = d.rows.filter(r => r.paid);
+
+  let h = '';
+
+  h += '<div class="cards">'
+    + kpi(s.payments, 'payments received')
+    + kpi('GHS ' + s.ghsCreditedTotal.toLocaleString(), 'credited to bookings')
+    + kpi(cur + ' ' + n2(s.chargedTotal), 'charged to cards')
+    + kpi(cur + ' ' + n2(s.netTotal), 'net after Stripe fees')
+    + kpi(cur + ' ' + n2(s.feeTotal), 'Stripe fees')
+    + kpi('GHS ' + s.balanceDueTotal.toLocaleString(), 'still to pay at the branch')
+    + '</div>';
+
+  // The single thing the desk must not get wrong.
+  h += '<div class="note"><strong>Credit the cedi figure in the "Cedis credited" column.</strong> '
+    + 'That is the amount the customer was quoted at the moment they paid. Do not re-convert the '
+    + cur + ' at today\'s rate — the rate moves daily, so that would give a different answer every '
+    + 'time and the desk would chase customers for shortfalls that are not theirs. '
+    + 'If sterling has moved since, that is Niobe\'s currency exposure, and the two right-hand '
+    + 'columns are where you watch it.</div>';
+
+  if (s.unmatched) {
+    h += '<div class="warn"><strong>' + s.unmatched + ' payment(s) arrived at Stripe but are not matched to a booking here.</strong> '
+      + 'The money was taken; the appointment may never have been confirmed. Each one is marked below — check it against SimpleSpa.</div>';
+  }
+  if (d.orphanLocal && d.orphanLocal.length) {
+    h += '<div class="warn"><strong>' + d.orphanLocal.length + ' payment(s) recorded here are not in this Stripe account:</strong> '
+      + esc(d.orphanLocal.map(o => o.reference).join(', ')) + '</div>';
+  }
+
+  h += '<div class="bar">'
+    + '<a class="btn" href="/api/intl-payments.csv">Download for Excel</a>'
+    + '<span class="mut">Live rate today: 1 ' + cur + ' = GHS ' + (d.liveRate ? d.liveRate.toFixed(2) : '—')
+    + ' · charged with a ' + d.fxBufferPct + '% buffer'
+    + (d.abandonedCheckouts ? ' · ' + d.abandonedCheckouts + ' checkout(s) started but never paid' : '')
+    + '</span></div>';
+
+  h += '<div class="wrap"><table><thead><tr>'
+    + ['Paid', 'Reference', 'Branch', 'Customer', 'Service'].map(t => '<th>' + t + '</th>').join('')
+    + ['Price GHS', 'Cedis credited', 'Still to pay', 'Charged ' + cur, 'Rate used',
+       'Stripe fee', 'Net ' + cur, 'Break-even rate', 'Headroom']
+        .map(t => '<th class="num">' + t + '</th>').join('')
+    + '<th>Available</th></tr></thead><tbody>';
+
+  for (const r of rows) {
+    const head = (r.headroomPct === null || r.headroomPct === undefined)
+      ? '<span class="mut">—</span>'
+      : '<span class="' + (r.headroomPct >= 0 ? 'ok' : 'flag') + '">' + r.headroomPct.toFixed(1) + '%</span>';
+    h += '<tr>'
+      + td(r.paidAt ? r.paidAt.slice(0, 10) : '')
+      + td(r.reference + (r.inOurRecords ? '' : ' <span class="flag">not matched</span>'), true)
+      + td(r.branchName || '<span class="mut">—</span>', true)
+      + td(esc(r.customer || r.email || ''))
+      + td(esc(r.service || (r.kind === 'Gift card' ? 'Gift card' : '')))
+      + tdn(r.priceGHS === null ? '<span class="mut">not recorded</span>' : r.priceGHS.toLocaleString(), true)
+      + tdn('<span class="ghs">' + (r.ghsCredited === null ? '—' : r.ghsCredited.toLocaleString()) + '</span>', true)
+      + tdn(r.balanceDueGHS === null ? '<span class="mut">—</span>'
+            : (r.balanceDueGHS > 0 ? '<strong>' + r.balanceDueGHS.toLocaleString() + '</strong>' : '0'), true)
+      + tdn(n2(r.chargedAmount))
+      + tdn(r.rateUsed === null ? '—' : r.rateUsed.toFixed(2) + (r.rateDerived ? '<span class="mut">*</span>' : ''), true)
+      + tdn(n2(r.stripeFee))
+      + tdn(n2(r.stripeNet))
+      + tdn(r.breakEvenRate === null ? '—' : r.breakEvenRate.toFixed(2))
+      + tdn(head, true)
+      + td(r.availableOn || '<span class="mut">—</span>', true)
+      + '</tr>';
+  }
+  h += '</tbody></table></div>';
+
+  h += '<div class="note"><strong>Reading the last two columns.</strong> '
+    + '"Break-even rate" is the GHS per ' + cur + ' the transfer into Ghana has to achieve for that '
+    + 'payment to cover the cedis already credited, after Stripe has taken its fee. "Headroom" compares '
+    + 'it with today\'s mid-market rate. Positive means the ' + d.fxBufferPct + '% buffer is holding; '
+    + 'negative means that payment brought in less than it promised, and the buffer needs raising. '
+    + 'Stripe charges roughly 1.5% + 20p on UK cards and 3.25% + 20p on cards issued outside the UK, '
+    + 'so a payment from the United States costs noticeably more than the same amount from London.'
+    + (rows.some(r => r.rateDerived) ? ' <br>* rate reconstructed from the amount charged — payments taken before this report existed did not record it.' : '')
+    + '</div>';
+
+  if (d.truncated) h += '<div class="warn">Only the most recent 500 Stripe checkouts were read — older payments are not listed.</div>';
+
+  $('#content').className = '';
+  $('#content').innerHTML = h;
+}
+
+function kpi(n, l) { return '<div class="kpi"><div class="n">' + n + '</div><div class="l">' + l + '</div></div>'; }
+function td(v, raw) { return '<td>' + (raw ? v : esc(v)) + '</td>'; }
+function tdn(v, raw) { return '<td class="num">' + (raw ? v : esc(v)) + '</td>'; }
+</script>
+</body>
+</html>

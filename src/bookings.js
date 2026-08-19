@@ -6,7 +6,7 @@ import { BRANCHES, CONFIG, branchById } from './config.js';
 import { ssPost } from './simplespa.js';
 import { isCreditClient } from './credit.js';
 import { registerHold, markSecured } from './holds.js';
-import { appendFileSync, mkdirSync } from 'fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -40,6 +40,32 @@ function recordCreditClaim(entry) {
 // customer's branch + mobile number; in demo we seed a couple so the flow can be walked.
 const bookings = new Map();      // booking id -> booking object (cache)
 const payments = new Map();      // reference   -> payment record
+
+// Pending payments have to survive a restart. A customer sent to Hubtel or Stripe can take
+// twenty minutes to come back — a Stripe checkout stays open for a day — and this service is
+// restarted on every deploy. Held only in memory, that window ends with someone who has really
+// paid being told "Unknown payment reference", with the money taken and the slot released.
+const PAYMENTS_FILE = join(DATA_DIR, 'payments.json');
+const KEEP_PAYMENTS = 500;       // plenty of history; keeps the file small enough to rewrite
+function loadPayments() {
+  try {
+    for (const p of JSON.parse(readFileSync(PAYMENTS_FILE, 'utf8'))) {
+      if (p?.reference) payments.set(p.reference, p);
+    }
+  } catch { /* no file yet, or unreadable — start empty rather than refuse to boot */ }
+}
+function savePayments() {
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    const all = [...payments.values()].slice(-KEEP_PAYMENTS);
+    // Write then rename: a crash midway through leaves the previous good file in place
+    // instead of a truncated one that would lose every in-flight payment at once.
+    const tmp = `${PAYMENTS_FILE}.tmp`;
+    writeFileSync(tmp, JSON.stringify(all));
+    renameSync(tmp, PAYMENTS_FILE);
+  } catch { /* persistence must never break the payment flow */ }
+}
+loadPayments();
 
 // Statuses that mean the appointment is already dealt with (no deposit to collect):
 // 15 Cancelled, 17 No-Show, 20 Confirmed, 22 Confirmed (No SMS), 25 Arrived, 30 Paid.
@@ -267,7 +293,9 @@ export async function startDeposit(bookingId, optionId, preferredGateway) {
   }, preferredGateway);
 
   payments.set(reference, { reference, bookingId: b.id, amount: chosen.amount, optionId: chosen.id,
+    price: b.price, customer: b.customer?.name || '', service: b.service || '', startedAt: new Date().toISOString(),
     gateway: init.gateway, chargeAmount: charge.amount, chargeCurrency: charge.currency, chargeRate: charge.rate, status: 'pending' });
+  savePayments();
   return { authorization_url: init.authorization_url, reference, amount: chosen.amount, gateway: init.gateway };
 }
 
@@ -278,8 +306,12 @@ export async function finalizeDeposit(reference) {
   const b = await getBooking(pay.bookingId);
 
   const v = await verifyTransaction(reference, pay.gateway);
-  if (!v.success) { pay.status = 'failed'; return { ok: false, reason: 'payment_not_successful' }; }
+  // 'failed' here means "not paid YET" as often as it means "will never be paid" — a mobile
+  // money payment can still be settling. Never overwrite a payment already recorded as paid.
+  if (!v.success) { if (pay.status !== 'paid') { pay.status = 'failed'; savePayments(); } return { ok: false, reason: 'payment_not_successful' }; }
   pay.status = 'paid';
+  pay.paidAt = pay.paidAt || new Date().toISOString();
+  savePayments();
 
   // Payment is now authoritative. Auto-confirm the SimpleSpa appointment; if the write can't
   // go through (e.g. write API not enabled yet), confirmAppointment flags it rather than
@@ -299,6 +331,24 @@ export async function finalizeDeposit(reference) {
     reference, branchId: b?.branchId, appointment_id: b?.appointment_id,
     amount: pay.amount, gateway: pay.gateway, confirmed: !!confirm.confirmed,
     reason: confirm.error || confirm.reason, at: new Date().toISOString(),
+    // What the deposit settles AGAINST, kept with the payment itself. Without the full price
+    // here, nothing downstream can say what is still owed — and a customer paying from abroad
+    // is charged in pounds, so the cedi figure and the rate that produced it have to be
+    // written down at the moment of payment. Re-converting the pounds a week later gives a
+    // different answer every day and would have the desk chasing shortfalls that do not exist.
+    price: b?.price ?? null,
+    optionId: pay.optionId || null,
+    customer: b?.customer?.name || '',
+    phone: b?.customer?.phone || '',
+    service: b?.service || '',
+    datetime: b?.datetime || '',
+    chargeAmount: pay.chargeAmount ?? null,
+    chargeCurrency: pay.chargeCurrency || 'GHS',
+    chargeRate: pay.chargeRate ?? null,
+    // What the gateway itself said was paid, so a mismatch between what we asked for and what
+    // was taken is visible rather than assumed away.
+    verifiedAmount: v.amount ?? null,
+    verifiedCurrency: v.currency || null,
   });
 
   return { ok: true, booking: b, payment: pay, confirm };

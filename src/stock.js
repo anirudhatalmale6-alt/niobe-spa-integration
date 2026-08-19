@@ -1,6 +1,7 @@
 import { BRANCHES, CONFIG } from './config.js';
 import { fetchBranchProducts } from './simplespa.js';
 import { mockBranchProducts } from './mockData.js';
+import { csvRow, csvFile } from './csv.js';
 
 const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
 // Group the same product across branches. product_id FIRST: SimpleSpa issues one id per
@@ -125,17 +126,6 @@ export async function getConsolidatedStock() {
 // CSV export — a stocktake sheet staff can open in Excel and count against.
 // ---------------------------------------------------------------------------
 
-// A cell beginning = + - @ is executed as a formula by Excel/Sheets when the file is
-// opened. Product names come from the SimpleSpa dashboard, so a name someone typed as
-// "-Elemis sample" would run as one. Prefix those with an apostrophe: Excel shows the
-// text and never evaluates it. Numbers we generate ourselves are exempt.
-function csvCell(value) {
-  let s = value === null || value === undefined ? '' : String(value);
-  if (/^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s)) s = `'${s}`;
-  return `"${s.replace(/"/g, '""')}"`;
-}
-const csvRow = (cells) => cells.map(csvCell).join(',');
-
 // Reconciliation must show the SIGNED figure. The dashboard shows an oversold branch as
 // 0 because nothing is sellable, but a stocktake needs to see "the system thinks -3" —
 // that discrepancy is the entire reason someone is counting the shelf.
@@ -218,8 +208,7 @@ export function stockCsv(data, { branchId = '', category = '', search = '', avai
     lines.push(csvRow([`WARNING: no data from ${down.map((b) => `${b.name} (${b.error || 'unavailable'})`).join('; ')} — their figures below/above read as 0 but are UNKNOWN.`]));
   }
 
-  // BOM so Excel reads it as UTF-8, CRLF because that is what Excel writes.
-  return `﻿${lines.join('\r\n')}\r\n`;
+  return csvFile(lines);
 }
 
 export function stockCsvFilename(data, branchId) {
