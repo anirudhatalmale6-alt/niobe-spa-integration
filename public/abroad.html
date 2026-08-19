@@ -67,7 +67,8 @@ function render(d) {
     + kpi(cur + ' ' + n2(s.chargedTotal), 'charged to cards')
     + kpi(cur + ' ' + n2(s.netTotal), 'net after Stripe fees')
     + kpi(cur + ' ' + n2(s.feeTotal), 'Stripe fees')
-    + kpi('GHS ' + s.balanceDueTotal.toLocaleString(), 'still to pay at the branch')
+    + kpi('GHS ' + s.balanceDueTotal.toLocaleString() + (s.balanceUnknown ? ' <span class="mut" style="font-size:13px">+' + s.balanceUnknown + '?</span>' : ''),
+          s.balanceUnknown ? 'still to pay (' + s.balanceUnknown + ' unknown)' : 'still to pay at the branch')
     + '</div>';
 
   // The single thing the desk must not get wrong.
@@ -78,6 +79,11 @@ function render(d) {
     + 'If sterling has moved since, that is Niobe\'s currency exposure, and the two right-hand '
     + 'columns are where you watch it.</div>';
 
+  if (s.balanceUnknown) {
+    h += '<div class="note">' + s.balanceUnknown + ' of these payments were taken before this report existed, '
+      + 'so the service price was never written down beside them and what is still owed cannot be worked out here — '
+      + 'check those bookings in SimpleSpa. Everything paid from now on records the price.</div>';
+  }
   if (s.unmatched) {
     h += '<div class="warn"><strong>' + s.unmatched + ' payment(s) arrived at Stripe but are not matched to a booking here.</strong> '
       + 'The money was taken; the appointment may never have been confirmed. Each one is marked below — check it against SimpleSpa.</div>';

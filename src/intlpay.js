@@ -212,6 +212,11 @@ export async function getIntlPayments({ includeUnpaid = false } = {}) {
       netTotal: round2(paidRows.reduce((s, r) => s + (r.stripeNet || 0), 0)),
       ghsCreditedTotal: round2(paidRows.reduce((s, r) => s + (r.ghsCredited || 0), 0)),
       balanceDueTotal: round2(paidRows.reduce((s, r) => s + (r.balanceDueGHS || 0), 0)),
+      // How much of that total is real. A payment whose service price was never recorded
+      // contributes nothing to the sum, so a screen reading "GHS 0 still to pay" would be
+      // stating that nothing is owed when the truth is that nobody knows — and "nothing owed"
+      // is an instruction to the desk to collect nothing.
+      balanceUnknown: paidRows.filter((r) => r.balanceDueGHS === null).length,
       unmatched: paidRows.filter((r) => !r.inOurRecords).length,
     },
   };
@@ -258,9 +263,15 @@ export function intlPaymentsCsv(data) {
   lines.push('');
   lines.push(csvRow([
     '', `TOTAL — ${s.payments} payments`, '', '', '', '', '',
-    '', s.ghsCreditedTotal, s.balanceDueTotal,
+    '',
+    s.ghsCreditedTotal,
+    // Never print a bare 0 when some rows have no price recorded: that reads as "nothing owed".
+    s.balanceUnknown ? `${s.balanceDueTotal} (+${s.balanceUnknown} unknown)` : s.balanceDueTotal,
     s.chargedTotal, '', s.feeTotal, s.netTotal, '', '', '', '', '',
   ]));
+  if (s.balanceUnknown) {
+    lines.push(csvRow([`${s.balanceUnknown} payment(s) have no service price recorded, so what is still owed on them cannot be worked out here — check those bookings in SimpleSpa. Payments taken from this release onwards record the price.`]));
+  }
 
   if (s.unmatched) {
     lines.push('');
