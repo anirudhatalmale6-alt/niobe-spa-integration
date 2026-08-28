@@ -25,9 +25,26 @@ import { lookupSimpleSpaCard } from './sscards.js';
 //      response the buyer "shouldn't" read — until that payment is confirmed.
 //
 // The 48-hour cancellation Niobe asked for is the cleanup for the leftovers of rule 1:
-// people who reach checkout and never pay. It is deliberately NOT an expiry on the card
-// itself. A paid Niobe gift card does not expire — that was the brief ("print at your
-// convenience"), and an expiring bearer instrument is money taken for nothing.
+// people who reach checkout and never pay. It is NOT the same thing as the card's own
+// 90-day expiry, and the two must never be conflated — one kills an order nobody paid
+// for, the other retires value somebody did pay for.
+//
+// THE 90-DAY EXPIRY (Niobe's policy, confirmed 28 Aug):
+//   - A card is valid for 90 days from PURCHASE — the day the money arrived — not from
+//     the day it is delivered. Otherwise a distant delivery date silently buys extra
+//     validity, and delivery is chosen by the buyer.
+//   - Delivery can therefore be scheduled at most 7 days out. Any further and the gift
+//     arrives having already eaten a chunk of its own life.
+//   - 14 days before expiry the holder is reminded, with a booking link — Niobe's
+//     customers complain about phoning to book and not getting through, so a reminder
+//     that says "ring the branch" is the reminder that gets ignored.
+//   - Expiry can be extended by 30 days for GHS 200, per card. That is a paid change to
+//     a bearer instrument, so it needs a payment reference or a named member of staff;
+//     it can never be applied by accident.
+//
+// Expiry is evaluated FROM THE DATE on every read, never trusted to have been written by
+// the sweep. A background job that is stopped, crashed or an hour behind must not be the
+// reason an expired card can still be spent.
 
 // Overridable so the test suite can exercise the real lifecycle against a throwaway
 // directory. Testing money code against the live ledger is how a test run ends up
@@ -42,12 +59,36 @@ const LEDGER_FILE = join(DATA_DIR, 'gift-cards.json');
 export const RESERVE_HOURS = Number(process.env.GIFTCARD_RESERVE_HOURS || 48);
 export const REMIND_HOURS = Math.max(1, Math.round(RESERVE_HOURS / 2));
 
+// The card's own life, all business decisions, all overridable without a code change.
+export const VALID_DAYS = Number(process.env.GIFTCARD_VALID_DAYS || 90);
+export const MAX_DELIVERY_DAYS = Number(process.env.GIFTCARD_MAX_DELIVERY_DAYS || 7);
+export const EXPIRY_REMIND_DAYS = Number(process.env.GIFTCARD_EXPIRY_REMIND_DAYS || 14);
+export const EXTENSION_DAYS = Number(process.env.GIFTCARD_EXTENSION_DAYS || 30);
+export const EXTENSION_FEE_GHS = Number(process.env.GIFTCARD_EXTENSION_FEE_GHS || 200);
+
 const STATUS = {
   RESERVED: 'reserved',    // checkout started, no money yet, code withheld
   PAID: 'paid',            // money confirmed, code released, balance live
+  EXPIRED: 'expired',      // paid, unspent, and past its 90 days — value forfeited
   CANCELLED: 'cancelled',  // reservation lapsed or was cancelled — permanently dead
   VOIDED: 'voided',        // a paid card withdrawn by staff (refund, error, fraud)
 };
+
+const DAY_MS = 24 * 3600 * 1000;
+const addDays = (iso, days) => new Date(Date.parse(iso) + days * DAY_MS).toISOString();
+
+// The single source of truth for "is this card past its date", used by every read and
+// every spend. The sweep only ever MATERIALISES what this already says — so a stalled
+// sweep can delay a reminder email, but it can never let expired value be spent.
+export function isExpired(card, now = new Date()) {
+  if (!card || card.status !== STATUS.PAID) return card?.status === STATUS.EXPIRED;
+  if (!card.expiresAt) return false;
+  return now.getTime() >= Date.parse(card.expiresAt);
+}
+export function daysLeft(card, now = new Date()) {
+  if (!card?.expiresAt) return null;
+  return Math.ceil((Date.parse(card.expiresAt) - now.getTime()) / DAY_MS);
+}
 export { STATUS };
 
 // --- persistence -------------------------------------------------------------
@@ -163,10 +204,30 @@ function normaliseItem(item, index) {
     recipientPhone: String(item.recipientPhone || '').trim(),
     message: String(item.message || '').trim().slice(0, 500),
     // A future date schedules delivery; empty means send as soon as it is paid for.
-    // Never used to gate the card's validity — a card is spendable from the moment
-    // it is paid for, whatever date the buyer chose to have it delivered.
-    deliverOn: item.deliverOn ? String(item.deliverOn).slice(0, 10) : null,
+    // Never used to gate the card's validity — a card is spendable from the moment it is
+    // paid for, whatever date the buyer chose to have it delivered. It cannot EXTEND the
+    // validity either: the 90 days run from purchase, which is why the window is capped.
+    deliverOn: normaliseDeliverOn(item.deliverOn, index),
   };
+}
+
+// Delivery may be scheduled up to MAX_DELIVERY_DAYS ahead — beyond that the recipient
+// opens a gift that has already spent part of its own 90 days, and the complaint lands
+// on the branch. A date in the past is a typo, not an instruction to send it late.
+function normaliseDeliverOn(raw, index) {
+  if (!raw) return null;
+  const day = String(raw).slice(0, 10);
+  // Compared at midnight, i.e. whole days. Parsing this at a time of day would make
+  // "seven days ahead" fail by a few hours depending on when the order was placed.
+  const t = Date.parse(`${day}T00:00:00Z`);
+  if (Number.isNaN(t)) throw new Error(`Gift card ${index + 1}: that delivery date is not a valid date.`);
+  const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+  if (t < today.getTime()) throw new Error(`Gift card ${index + 1}: the delivery date has already passed.`);
+  const latest = today.getTime() + MAX_DELIVERY_DAYS * DAY_MS;
+  if (t > latest) {
+    throw new Error(`Gift card ${index + 1}: delivery can be scheduled up to ${MAX_DELIVERY_DAYS} days ahead. The card is valid for ${VALID_DAYS} days from today, so a later delivery would shorten the time your recipient has to use it.`);
+  }
+  return day;
 }
 
 // --- reserve -----------------------------------------------------------------
@@ -200,9 +261,15 @@ export function reserveBasket({ buyerName, buyerEmail, buyerPhone, items, channe
       buyerPhone: String(buyerPhone || '').trim(),
       ...item,
       createdAt: now.toISOString(),
-      // Deadline for the RESERVATION, not for the card. Cleared when it is paid.
+      // Deadline for the RESERVATION, not for the card. Cleared when it is paid, and
+      // replaced by expiresAt — the card's own 90 days. Two different clocks, never
+      // stored in the same field, because confusing them is how an unpaid order gets
+      // 90 days of life or a paid card dies in 48 hours.
       reserveExpiresAt: expiresAt.toISOString(),
       remindedAt: null,
+      expiresAt: null,
+      expiryRemindedAt: null,
+      extensions: [],
       paidAt: null,
       payment: null,
       transactions: [],
@@ -243,7 +310,9 @@ export function markPaid(reference, { paymentRef, method = 'online', amountPaid 
 
   const paid = cards.filter((c) => c.status === STATUS.PAID);
   if (paid.length === cards.length) {
-    return { ok: true, alreadyPaid: true, cards: paid.map(publicCard) };
+    // Wrapped, not passed bare: Array.map hands the INDEX as the second argument, which
+    // publicCard reads as `now`. Bare `.map(publicCard)` dates every card to 1970.
+    return { ok: true, alreadyPaid: true, cards: paid.map((c) => publicCard(c)) };
   }
 
   // A cancelled reservation that then pays is not an error to swallow — the money is
@@ -264,7 +333,11 @@ export function markPaid(reference, { paymentRef, method = 'online', amountPaid 
     // The card becomes worth its face value at exactly the moment it becomes paid.
     // These two are one decision, and they are written together on purpose.
     card.balance = card.faceValue;
-    card.reserveExpiresAt = null;      // a paid card does not expire
+    card.reserveExpiresAt = null;      // the reservation clock stops...
+    // ...and the card's own clock starts, from the moment the money arrived. Using the
+    // payment date rather than the order date matters for the offline payers revived
+    // below: someone who pays by transfer three days late gets a full 90 days, not 87.
+    card.expiresAt = addDays(now, VALID_DAYS);
     card.payment = { paymentRef: paymentRef || null, method, at: now, by };
     card.transactions.push({ at: now, type: 'issue', amount: card.faceValue, balance: card.balance, ref: paymentRef || null });
   }
@@ -278,7 +351,7 @@ export function markPaid(reference, { paymentRef, method = 'online', amountPaid 
   }
 
   auditLog({ event: 'paid', reference, method, paymentRef: paymentRef || null, by, count: cards.length, expected, amountPaid: amountPaid == null ? null : money(amountPaid), revived: revived.length });
-  return { ok: true, alreadyPaid: false, revived: revived.length, cards: cards.map(publicCard) };
+  return { ok: true, alreadyPaid: false, revived: revived.length, cards: cards.map((c) => publicCard(c)) };
 }
 
 // A paid card withdrawn by staff — a refund, a duplicate, a fraudulent order. Kept
@@ -306,6 +379,10 @@ export function spend(code, amount, { reason, reference, branchId, by } = {}) {
   const card = ledger[String(code || '').trim().toUpperCase()];
   if (!card) return { ok: false, reason: 'not_found' };
   if (card.status !== STATUS.PAID) return { ok: false, reason: 'not_spendable', status: card.status };
+  // Checked against the DATE, not against the stored status. If the sweep is behind —
+  // stopped, crashed, or simply not due for another hour — an expired card must still
+  // be refused. Correctness cannot depend on a background job having run.
+  if (isExpired(card)) return { ok: false, reason: 'expired', expiresAt: card.expiresAt, balance: card.balance };
 
   const amt = money(amount);
   if (!(amt > 0)) return { ok: false, reason: 'bad_amount' };
@@ -342,6 +419,45 @@ export function unspend(code, amount, { reason, by } = {}) {
   return { ok: true, balance: card.balance, card: publicCard(card) };
 }
 
+// --- extending a card --------------------------------------------------------
+// Niobe's paid extension: another 30 days for GHS 200 per card. Two rules make this
+// safe rather than merely possible.
+//
+// First, it CANNOT happen for free by accident. Adding 30 days to a bearer instrument is
+// giving away money, so it needs either a payment reference or a named member of staff
+// taking responsibility. An extension with neither is refused.
+//
+// Second, the new expiry runs from the CURRENT expiry, not from today — unless the card
+// has already lapsed, in which case it runs from today. Nobody should pay GHS 200 for
+// thirty days and receive twenty-two because they renewed a week early.
+export function extendCard(code, { days = EXTENSION_DAYS, feeGHS = EXTENSION_FEE_GHS, paymentRef = null, by = null, reason = '' } = {}) {
+  const card = ledger[String(code || '').trim().toUpperCase()];
+  if (!card) return { ok: false, reason: 'not_found' };
+  if (![STATUS.PAID, STATUS.EXPIRED].includes(card.status)) return { ok: false, reason: 'not_extendable', status: card.status };
+  if (!paymentRef && !by) return { ok: false, reason: 'unpaid_extension' };
+  const n = Number(days);
+  if (!(n > 0 && n <= 365)) return { ok: false, reason: 'bad_days' };
+  // A spent-out card has nothing to extend; taking GHS 200 for it would be taking money
+  // for nothing, and the customer would only discover that at the till.
+  if (!(card.balance > 0)) return { ok: false, reason: 'no_balance' };
+
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const from = (card.expiresAt && Date.parse(card.expiresAt) > now.getTime()) ? card.expiresAt : nowIso;
+  const previous = card.expiresAt;
+  card.expiresAt = addDays(from, n);
+  // Bringing a lapsed card back to life is the whole point of a paid extension.
+  if (card.status === STATUS.EXPIRED) card.status = STATUS.PAID;
+  // A fresh expiry deserves a fresh reminder, otherwise the holder is warned once and
+  // never again — and quietly loses the balance they just paid GHS 200 to protect.
+  card.expiryRemindedAt = null;
+  card.extensions.push({ at: nowIso, days: n, feeGHS: money(feeGHS), from: previous, to: card.expiresAt, paymentRef, by, reason });
+  card.transactions.push({ at: nowIso, type: 'extend', amount: 0, balance: card.balance, days: n, feeGHS: money(feeGHS), ref: paymentRef, by });
+  saveLedger();
+  auditLog({ event: 'extended', code: mask(card.code), days: n, feeGHS: money(feeGHS), from: previous, to: card.expiresAt, paymentRef, by, reason });
+  return { ok: true, expiresAt: card.expiresAt, previousExpiry: previous, daysLeft: daysLeft(card, now), feeGHS: money(feeGHS), card: publicCard(card) };
+}
+
 // --- the 48-hour sweep -------------------------------------------------------
 // Cancels reservations nobody paid for, and nudges the ones about to lapse.
 //
@@ -352,32 +468,62 @@ export function sweepReservations(now = new Date(), { readOnly = false } = {}) {
   const t = now.getTime();
   const cancelled = [];
   const toRemind = [];
+  const expired = [];
+  const expiringSoon = [];
 
   for (const card of Object.values(ledger)) {
-    if (card.status !== STATUS.RESERVED) continue;
-    const expiry = card.reserveExpiresAt ? Date.parse(card.reserveExpiresAt) : null;
-    if (!expiry) continue;
+    // --- clock one: the unpaid reservation ---
+    if (card.status === STATUS.RESERVED) {
+      const expiry = card.reserveExpiresAt ? Date.parse(card.reserveExpiresAt) : null;
+      if (!expiry) continue;
 
-    if (t >= expiry) {
-      cancelled.push(card);
-      if (!readOnly) {
-        card.status = STATUS.CANCELLED;
-        card.cancelledAt = new Date(t).toISOString();
-        card.cancelReason = 'unpaid';
-        card.balance = 0;
+      if (t >= expiry) {
+        cancelled.push(card);
+        if (!readOnly) {
+          card.status = STATUS.CANCELLED;
+          card.cancelledAt = new Date(t).toISOString();
+          card.cancelReason = 'unpaid';
+          card.balance = 0;
+        }
+        continue;
+      }
+      // Nudge once, and only once, when the deadline is within the reminder window.
+      if (!card.remindedAt && t >= expiry - REMIND_HOURS * 3600 * 1000) {
+        toRemind.push(card);
+        if (!readOnly) card.remindedAt = new Date(t).toISOString();
       }
       continue;
     }
-    // Nudge once, and only once, when the deadline is within the reminder window.
-    if (!card.remindedAt && t >= expiry - REMIND_HOURS * 3600 * 1000) {
-      toRemind.push(card);
-      if (!readOnly) card.remindedAt = new Date(t).toISOString();
+
+    // --- clock two: the paid card's own 90 days ---
+    if (card.status !== STATUS.PAID || !card.expiresAt) continue;
+    const cardExpiry = Date.parse(card.expiresAt);
+
+    if (t >= cardExpiry) {
+      // The balance is deliberately LEFT ON the record rather than zeroed. It is the
+      // forfeited value — the liability coming off Niobe's books — and a figure they
+      // will want to see. Nothing can spend it: isExpired() gates that by date.
+      expired.push(card);
+      if (!readOnly) {
+        card.status = STATUS.EXPIRED;
+        card.expiredAt = new Date(t).toISOString();
+        card.transactions.push({ at: new Date(t).toISOString(), type: 'expire', amount: 0, balance: card.balance, forfeited: card.balance });
+      }
+      continue;
+    }
+    // 14 days out, once, and only for cards that still have something on them —
+    // reminding somebody about an empty card is noise that trains them to ignore
+    // the next one, which will be the reminder that mattered.
+    if (!card.expiryRemindedAt && card.balance > 0 && t >= cardExpiry - EXPIRY_REMIND_DAYS * DAY_MS) {
+      expiringSoon.push(card);
+      if (!readOnly) card.expiryRemindedAt = new Date(t).toISOString();
     }
   }
 
-  if (!readOnly && (cancelled.length || toRemind.length)) {
+  if (!readOnly && (cancelled.length || toRemind.length || expired.length || expiringSoon.length)) {
     saveLedger();
     for (const c of cancelled) auditLog({ event: 'cancelled', code: mask(c.code), reference: c.reference, reason: 'unpaid' });
+    for (const c of expired) auditLog({ event: 'expired', code: mask(c.code), reference: c.reference, forfeited: c.balance, expiresAt: c.expiresAt });
   }
 
   // Group by basket — one buyer with six cards gets one email, not six.
@@ -392,19 +538,62 @@ export function sweepReservations(now = new Date(), { readOnly = false } = {}) {
     return [...m.values()];
   };
 
-  return { cancelled: byRef(cancelled), remind: byRef(toRemind), readOnly, at: new Date(t).toISOString() };
+  // The expiry reminder goes to whoever is HOLDING the card, which is the recipient of
+  // a gift, not the person who bought it three months ago. It is per card, not per
+  // basket — six people were given six different cards.
+  //
+  // NOTE: unlike every other report in this module, these entries carry the FULL code —
+  // a reminder without a working link is just an announcement that money is about to be
+  // lost. So this one report is sensitive: hand it to the notifier, never to a log. Use
+  // `masked` for anything that gets written down. (Nothing here can leak an unpaid card,
+  // because only PAID cards ever reach this branch of the sweep.)
+  const holder = (c) => ({
+    code: c.code,
+    masked: mask(c.code),
+    balance: c.balance,
+    expiresAt: c.expiresAt,
+    daysLeft: daysLeft(c, now),
+    // Whoever we can actually reach. A print-at-home gift may have no recipient address,
+    // in which case the buyer is the only person we can warn.
+    to: (c.gift && c.recipientEmail) || c.buyerEmail,
+    toName: (c.gift && c.recipientName) || c.buyerName,
+    // Niobe's customers complain that they phone to book and cannot get through, so the
+    // reminder must carry a way to book without phoning anybody. This is the difference
+    // between a reminder that recovers the booking and one that just announces a loss.
+    bookUrl: `${(CONFIG.publicUrl || '').replace(/\/$/, '')}/book?gc=${encodeURIComponent(c.code)}`,
+    extendFeeGHS: EXTENSION_FEE_GHS,
+    extendDays: EXTENSION_DAYS,
+  });
+
+  return {
+    cancelled: byRef(cancelled),          // unpaid orders killed at 48h
+    remind: byRef(toRemind),              // unpaid orders about to be killed
+    expired: expired.map(holder),         // cards that reached 90 days, value forfeited
+    expiringSoon: expiringSoon.map(holder),  // cards 14 days out — book, or pay to extend
+    forfeited: money(expired.reduce((s, c) => s + c.balance, 0)),
+    readOnly,
+    at: new Date(t).toISOString(),
+  };
 }
 
 // --- the customer-facing view -----------------------------------------------
 // What a card looks like to anyone outside this module. The buyer's own details are
 // here because the buyer sees their own order; the full code is included only where
 // the card is PAID, which is the whole point of the lifecycle above.
-function publicCard(card) {
-  const paid = card.status === STATUS.PAID;
+function publicCard(card, now = new Date()) {
+  // An expired card still shows its code — the holder has it printed in their hand, and
+  // "that code doesn't exist" is the wrong answer to someone asking why it was refused.
+  // They need to be told it lapsed, and offered the GHS 200 extension.
+  const issued = card.status === STATUS.PAID || card.status === STATUS.EXPIRED;
+  const expired = isExpired(card, now);
   return {
-    code: paid ? card.code : null,
+    code: issued ? card.code : null,
     masked: mask(card.code),
-    status: card.status,
+    status: expired && card.status === STATUS.PAID ? STATUS.EXPIRED : card.status,
+    expired,
+    expiresAt: card.expiresAt,
+    daysLeft: daysLeft(card, now),
+    extensions: (card.extensions || []).length,
     faceValue: card.faceValue,
     balance: card.balance,
     currency: card.currency,
@@ -436,7 +625,7 @@ export function getCard(code) {
 // critically — distinguishes "no such card anywhere" from "one of the systems did not
 // answer". Those are opposite messages to the person standing at the desk. An outage
 // must never be reported as an invalid card.
-export async function lookupAnyCard(code) {
+export async function lookupAnyCard(code, { skipVariants = false } = {}) {
   const c = String(code || '').trim().toUpperCase();
   if (!c) return { found: false, reason: 'no_code', errors: [] };
 
@@ -448,6 +637,7 @@ export async function lookupAnyCard(code) {
     // A reserved card is NOT reported as a card. Nobody should be able to discover that
     // a code exists before it has been paid for, let alone see a balance against it.
     if (own.status === STATUS.RESERVED) return { found: false, source: null, reason: 'not_found', errors };
+    const expired = isExpired(own);
     return {
       found: true,
       source: 'niobe',
@@ -455,12 +645,16 @@ export async function lookupAnyCard(code) {
       balance: own.balance,
       initialBalance: own.faceValue,
       currency: own.currency,
-      status: own.status,
-      // Ours never expire once paid — that is the product decision, stated here so a
-      // reader does not go looking for the expiry logic that isn't there.
-      expired: false,
-      expiresAt: null,
-      valid: own.status === STATUS.PAID && own.balance > 0,
+      status: expired ? STATUS.EXPIRED : own.status,
+      expired,
+      expiresAt: own.expiresAt,
+      daysLeft: daysLeft(own),
+      // What it costs to bring it back, so the page can offer the extension in the same
+      // breath as the bad news rather than sending the customer to phone a branch.
+      extendable: expired && own.balance > 0,
+      extendFeeGHS: EXTENSION_FEE_GHS,
+      extendDays: EXTENSION_DAYS,
+      valid: own.status === STATUS.PAID && own.balance > 0 && !expired,
       // Ours can be deducted automatically; the other two cannot, and the desk needs
       // to know which it is holding before it starts a treatment.
       selfService: true,
@@ -514,7 +708,49 @@ export async function lookupAnyCard(code) {
     errors.push({ source: 'simplespa', error: e.message });
   }
 
+  // Before giving up: the code may have been MIS-READ off a printed voucher rather than
+  // not existing. New Niobe codes cannot contain O/0/I/1/L, but the SimpleSpa cards
+  // already in circulation can and do — DPB-QO0 has both an O and a zero in it, and
+  // there is no way to reissue what customers are already holding.
+  //
+  // So try the plausible mis-readings. The safety rule is that this may only ever
+  // resolve to ONE card: if two different real cards both match, we have no way to know
+  // which one is in the customer's hand, and guessing would spend a stranger's money.
+  if (!skipVariants) {
+    const variants = ambiguityVariants(c);
+    const hits = [];
+    for (const v of variants) {
+      const r = await lookupAnyCard(v, { skipVariants: true });   // no recursion beyond one level
+      if (r.found) hits.push(r);
+      if (hits.length > 1) break;
+    }
+    if (hits.length === 1) return { ...hits[0], correctedFrom: c, errors };
+    if (hits.length > 1) return { found: false, reason: 'ambiguous_code', errors };
+  }
+
   // Nowhere. Only now, and only if every system actually answered, is it safe to tell
   // someone their code is not a gift card.
   return { found: false, reason: errors.length ? 'unavailable' : 'not_found', errors };
+}
+
+// The characters people actually confuse on a printed voucher, in both directions.
+const CONFUSABLE = { O: '0', '0': 'O', I: '1', '1': 'I', L: '1' };
+
+// Every single-and-multi-character re-reading of an ambiguous code, excluding the
+// original. Capped hard: a code full of ambiguous characters would otherwise fan out
+// into hundreds of live API calls, and past a handful of possibilities the honest
+// answer is "please check with the branch" anyway.
+function ambiguityVariants(code, cap = 8) {
+  const positions = [...code].map((ch, i) => (CONFUSABLE[ch] ? i : -1)).filter((i) => i >= 0);
+  if (!positions.length || positions.length > 4) return [];
+  const out = new Set();
+  for (let mask = 1; mask < (1 << positions.length) && out.size < cap; mask++) {
+    const chars = [...code];
+    for (let b = 0; b < positions.length; b++) {
+      if (mask & (1 << b)) chars[positions[b]] = CONFUSABLE[chars[positions[b]]];
+    }
+    const v = chars.join('');
+    if (v !== code) out.add(v);
+  }
+  return [...out];
 }

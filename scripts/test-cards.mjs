@@ -7,7 +7,7 @@
 //
 // Run:  node scripts/test-cards.mjs
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -16,9 +16,14 @@ process.env.NIOBE_DATA_DIR = dir;
 process.env.GIFTCARD_RESERVE_HOURS = '48';
 
 const {
-  reserveBasket, markPaid, spend, unspend, voidCard, sweepReservations,
-  lookupAnyCard, getCard, basketCards, STATUS, RESERVE_HOURS, REMIND_HOURS,
+  reserveBasket, markPaid, spend, unspend, voidCard, sweepReservations, extendCard,
+  lookupAnyCard, getCard, basketCards, isExpired, daysLeft,
+  STATUS, RESERVE_HOURS, REMIND_HOURS,
+  VALID_DAYS, MAX_DELIVERY_DAYS, EXPIRY_REMIND_DAYS, EXTENSION_DAYS, EXTENSION_FEE_GHS,
 } = await import('../src/cards.js');
+
+const DAY = 24 * 3600 * 1000;
+const iso = (d) => new Date(d).toISOString().slice(0, 10);
 
 let passed = 0;
 const results = [];
@@ -110,14 +115,15 @@ await test('the buyer is nudged once, before the deadline', () => {
   assert.equal(mine(sweepReservations(remindTime)).length, 0, 'the buyer was nudged twice');
 });
 
-await test('a paid card is never touched by the sweep', () => {
+await test('a paid card is not touched by the RESERVATION sweep', () => {
   const r = reserveBasket({ ...buyer, items: [oneCard()] });
   markPaid(r.reference, { paymentRef: 'HUB-124' });
   const [card] = basketCards(r.reference);
-  assert.equal(card.reserveExpiresAt, null, 'a paid card must not keep a deadline');
-  const farFuture = new Date(Date.now() + 400 * 24 * 3600 * 1000);
-  sweepReservations(farFuture);
-  assert.equal(getCard(card.code).status, STATUS.PAID, 'the sweep expired a paid card');
+  assert.equal(card.reserveExpiresAt, null, 'a paid card must not keep the reservation deadline');
+  // Well past 48 hours, well inside its own 90 days: the reservation clock must not
+  // touch it. The two clocks are separate and this is what proves it.
+  sweepReservations(new Date(Date.now() + 10 * DAY));
+  assert.equal(getCard(card.code).status, STATUS.PAID, 'the reservation sweep killed a paid card');
   assert.equal(getCard(card.code).balance, 500);
 });
 
@@ -290,6 +296,250 @@ await test('the ledger survives a restart', async () => {
   assert.equal(after.status, 'paid');
   // And a second payment callback after the restart must still be a no-op.
   assert.equal(fresh.markPaid(r.reference, { paymentRef: 'HUB-133' }).alreadyPaid, true);
+});
+
+// --- the 90-day expiry (Niobe policy, 28 Aug) --------------------------------
+
+const paidCard = (over = {}, payOpts = {}) => {
+  const r = reserveBasket({ ...buyer, items: [oneCard(over)] });
+  const { cards: [pc] } = markPaid(r.reference, { paymentRef: `HUB-${Math.round(Date.parse(r.expiresAt) % 100000)}`, ...payOpts });
+  return { reference: r.reference, code: pc.code, card: () => getCard(pc.code) };
+};
+
+await test('a paid card is valid for 90 days from payment, not from delivery', () => {
+  const { card } = paidCard({ deliverOn: iso(Date.now() + 6 * DAY) });
+  const c = card();
+  assert.ok(c.expiresAt, 'a paid card must carry an expiry');
+  const days = Math.round((Date.parse(c.expiresAt) - Date.parse(c.paidAt)) / DAY);
+  assert.equal(days, VALID_DAYS);
+  // The delivery date must NOT push the expiry out — that is the loophole being closed.
+  assert.ok(Date.parse(c.expiresAt) < Date.parse(`${c.deliverOn}T09:00:00Z`) + VALID_DAYS * DAY);
+});
+
+await test('delivery cannot be scheduled beyond the 7-day window', () => {
+  assert.doesNotThrow(() => reserveBasket({ ...buyer, items: [oneCard({ deliverOn: iso(Date.now() + MAX_DELIVERY_DAYS * DAY) })] }));
+  assert.throws(
+    () => reserveBasket({ ...buyer, items: [oneCard({ deliverOn: iso(Date.now() + (MAX_DELIVERY_DAYS + 1) * DAY) })] }),
+    /up to 7 days ahead/,
+  );
+  assert.throws(() => reserveBasket({ ...buyer, items: [oneCard({ deliverOn: iso(Date.now() - DAY) })] }), /already passed/);
+  assert.throws(() => reserveBasket({ ...buyer, items: [oneCard({ deliverOn: 'not-a-date' })] }), /not a valid date/);
+});
+
+await test('an offline payer who pays late still gets a full 90 days', () => {
+  const r = reserveBasket({ ...buyer, items: [oneCard()] });
+  const [reserved] = basketCards(r.reference);
+  const orderedAt = Date.parse(reserved.createdAt);
+  sweepReservations(new Date(Date.parse(reserved.reserveExpiresAt) + 60_000));   // lapses
+  const { cards: [pc] } = markPaid(r.reference, { method: 'bank-transfer', by: 'front-desk' });
+  const c = getCard(pc.code);
+  const fromPayment = Math.round((Date.parse(c.expiresAt) - Date.parse(c.paidAt)) / DAY);
+  assert.equal(fromPayment, VALID_DAYS, 'the 90 days must run from payment, not the order');
+  assert.ok(Date.parse(c.expiresAt) > orderedAt + VALID_DAYS * DAY, 'the late payer was short-changed');
+});
+
+await test('an expired card is refused even if the sweep never ran', () => {
+  const { code, card } = paidCard();
+  const c = card();
+  // Move the expiry into the past WITHOUT sweeping — this is the stalled-cron case.
+  c.expiresAt = new Date(Date.now() - DAY).toISOString();
+  assert.equal(c.status, STATUS.PAID, 'precondition: the stored status still says paid');
+  assert.equal(isExpired(c), true);
+  const s = spend(code, 100);
+  assert.equal(s.ok, false);
+  assert.equal(s.reason, 'expired', 'expired value was spendable because a job had not run');
+});
+
+await test('the expiry sweep retires the card and reports the forfeited value', () => {
+  const { code, card } = paidCard({ amount: 500 });
+  card().expiresAt = new Date(Date.now() - DAY).toISOString();
+  const sweep = sweepReservations(new Date());
+  const mine = sweep.expired.filter((e) => e.code === code);
+  assert.equal(mine.length, 1);
+  assert.equal(mine[0].balance, 500);
+  assert.equal(getCard(code).status, STATUS.EXPIRED);
+  // The balance stays ON the record: it is the liability coming off Niobe's books.
+  assert.equal(getCard(code).balance, 500, 'the forfeited value was zeroed and lost');
+  assert.ok(sweep.forfeited >= 500);
+  assert.ok(getCard(code).transactions.some((t) => t.type === 'expire'));
+});
+
+await test('a part-spent card carries only its remainder into expiry', () => {
+  const { code, card } = paidCard({ amount: 500 });
+  spend(code, 300, { reason: 'Massage' });
+  card().expiresAt = new Date(Date.now() - DAY).toISOString();
+  const sweep = sweepReservations(new Date());
+  assert.equal(sweep.expired.find((e) => e.code === code).balance, 200);
+});
+
+await test('the holder is reminded 14 days out, once, with a way to book', () => {
+  const { code, card } = paidCard({ amount: 500, recipientEmail: 'kofi@example.com' });
+  const c = card();
+  c.expiresAt = new Date(Date.now() + (EXPIRY_REMIND_DAYS - 1) * DAY).toISOString();
+
+  const first = sweepReservations(new Date()).expiringSoon.filter((e) => e.code === code);
+  assert.equal(first.length, 1);
+  assert.equal(first[0].to, 'kofi@example.com', 'the reminder went to the buyer, not the holder');
+  assert.equal(first[0].daysLeft <= EXPIRY_REMIND_DAYS, true);
+  // Niobe's customers cannot get through on the phone — a reminder with no booking
+  // link is just an announcement that they are about to lose money.
+  assert.match(first[0].bookUrl, /\/book\?gc=/);
+  assert.equal(first[0].extendFeeGHS, EXTENSION_FEE_GHS);
+
+  const second = sweepReservations(new Date()).expiringSoon.filter((e) => e.code === code);
+  assert.equal(second.length, 0, 'the holder was reminded twice');
+});
+
+await test('a card the buyer kept for themselves reminds the buyer', () => {
+  const { code } = paidCard({ forSelf: true, delivery: 'print', recipientEmail: '' });
+  getCard(code).expiresAt = new Date(Date.now() + (EXPIRY_REMIND_DAYS - 1) * DAY).toISOString();
+  const hit = sweepReservations(new Date()).expiringSoon.find((e) => e.code === code);
+  assert.equal(hit.to, buyer.buyerEmail);
+});
+
+await test('a spent-out card is not reminded about', () => {
+  const { code, card } = paidCard({ amount: 500 });
+  spend(code, 500);
+  card().expiresAt = new Date(Date.now() + (EXPIRY_REMIND_DAYS - 1) * DAY).toISOString();
+  const hit = sweepReservations(new Date()).expiringSoon.filter((e) => e.code === code);
+  assert.equal(hit.length, 0, 'the customer was chased about a card with nothing on it');
+});
+
+await test('a read-only sweep neither expires nor marks anybody reminded', () => {
+  const { code, card } = paidCard();
+  card().expiresAt = new Date(Date.now() - DAY).toISOString();
+  const sweep = sweepReservations(new Date(), { readOnly: true });
+  assert.equal(sweep.expired.filter((e) => e.code === code).length, 1, 'read-only must still report');
+  assert.equal(getCard(code).status, STATUS.PAID, 'a read-only sweep expired a card');
+  assert.equal(getCard(code).expiryRemindedAt, null);
+});
+
+// --- the paid extension -------------------------------------------------------
+
+await test('an extension cannot be given away for free by accident', () => {
+  const { code } = paidCard();
+  const res = extendCard(code, {});
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'unpaid_extension', 'thirty days were added with nobody accountable');
+});
+
+await test('extending early adds 30 days to the expiry, not to today', () => {
+  const { code, card } = paidCard();
+  const before = card().expiresAt;
+  const res = extendCard(code, { paymentRef: 'HUB-EXT-1' });
+  assert.equal(res.ok, true);
+  const added = Math.round((Date.parse(res.expiresAt) - Date.parse(before)) / DAY);
+  assert.equal(added, EXTENSION_DAYS, 'the customer paid for 30 days and lost the unused ones');
+  assert.equal(card().extensions[0].feeGHS, EXTENSION_FEE_GHS);
+});
+
+await test('extending a lapsed card revives it and runs from today', () => {
+  const { code, card } = paidCard({ amount: 500 });
+  card().expiresAt = new Date(Date.now() - 5 * DAY).toISOString();
+  sweepReservations(new Date());
+  assert.equal(card().status, STATUS.EXPIRED);
+
+  const res = extendCard(code, { paymentRef: 'HUB-EXT-2' });
+  assert.equal(res.ok, true);
+  assert.equal(card().status, STATUS.PAID, 'a paid extension left the card dead');
+  const fromToday = Math.round((Date.parse(res.expiresAt) - Date.now()) / DAY);
+  assert.equal(fromToday, EXTENSION_DAYS, 'the extension was eaten by the days already lost');
+  assert.equal(spend(code, 100).ok, true, 'the revived card still could not be spent');
+});
+
+await test('an extension re-arms the reminder', () => {
+  const { code, card } = paidCard({ amount: 500 });
+  card().expiresAt = new Date(Date.now() + (EXPIRY_REMIND_DAYS - 1) * DAY).toISOString();
+  sweepReservations(new Date());
+  assert.ok(card().expiryRemindedAt, 'precondition: reminded once');
+  extendCard(code, { paymentRef: 'HUB-EXT-3' });
+  assert.equal(card().expiryRemindedAt, null, 'the holder would never be warned again');
+});
+
+await test('there is nothing to extend on an empty or unpaid card', () => {
+  const { code } = paidCard({ amount: 500 });
+  spend(code, 500);
+  assert.equal(extendCard(code, { paymentRef: 'X' }).reason, 'no_balance');
+
+  const r = reserveBasket({ ...buyer, items: [oneCard()] });
+  const [reserved] = basketCards(r.reference);
+  assert.equal(extendCard(reserved.code, { paymentRef: 'X' }).reason, 'not_extendable');
+});
+
+// --- what the customer is told ------------------------------------------------
+
+await test('an expired card reads as expired, not as invalid or missing', async () => {
+  const { code, card } = paidCard({ amount: 500 });
+  card().expiresAt = new Date(Date.now() - DAY).toISOString();
+  const look = await lookupAnyCard(code);
+  assert.equal(look.found, true, 'the holder was told their card does not exist');
+  assert.equal(look.expired, true);
+  assert.equal(look.valid, false);
+  assert.equal(look.balance, 500, 'the holder cannot see what they are about to lose');
+  // The bad news and the way out have to arrive together, or they phone the branch.
+  assert.equal(look.extendable, true);
+  assert.equal(look.extendFeeGHS, EXTENSION_FEE_GHS);
+});
+
+await test('a live card shows its expiry and how long is left', async () => {
+  const { code } = paidCard({ amount: 500 });
+  const look = await lookupAnyCard(code);
+  assert.equal(look.valid, true);
+  assert.equal(look.expired, false);
+  assert.equal(look.daysLeft, VALID_DAYS);
+  assert.equal(look.extendable, false, 'a live card must not be nagged to pay for an extension');
+});
+
+// --- mis-read codes off a printed voucher -------------------------------------
+// New codes cannot contain O/0/I/1/L. The SimpleSpa cards already in customers' hands
+// can, and cannot be reissued — so a mis-reading has to resolve, safely.
+
+// Legacy cards are seeded by writing the ledger and reloading the module — which is
+// how they will genuinely arrive when their existing data is imported.
+let legacySeq = 0;
+async function withLegacyCards(cards) {
+  const raw = JSON.parse(readFileSync(join(dir, 'gift-cards.json'), 'utf8'));
+  const paidOn = new Date().toISOString();
+  for (const [code, balance] of Object.entries(cards)) {
+    raw[code] = {
+      code, status: 'paid', faceValue: balance, balance, currency: 'GHS',
+      reference: `LEGACY-${++legacySeq}`, buyerName: 'Imported', buyerEmail: 'imported@example.com',
+      gift: false, delivery: 'print', design: 'default', recipientName: '', recipientEmail: '',
+      message: '', deliverOn: null, createdAt: paidOn, paidAt: paidOn,
+      expiresAt: new Date(Date.now() + 60 * DAY).toISOString(),
+      reserveExpiresAt: null, remindedAt: null, expiryRemindedAt: null,
+      extensions: [], payment: { method: 'imported', at: paidOn }, transactions: [],
+    };
+  }
+  writeFileSync(join(dir, 'gift-cards.json'), JSON.stringify(raw, null, 1));
+  return import(`../src/cards.js?legacy=${legacySeq}`);
+}
+
+await test('a code mis-read off a printed voucher still finds the one card it can be', async () => {
+  // DPB-QO0 is a real Alisa Hotel code — it contains both the letter O and a zero.
+  const mod = await withLegacyCards({ 'NB-DPB-QO0': 620 });
+  const look = await mod.lookupAnyCard('NB-DPB-Q0O');     // both characters mis-read
+  assert.equal(look.found, true, 'a genuine voucher was refused over a printing ambiguity');
+  assert.equal(look.balance, 620);
+  assert.equal(look.correctedFrom, 'NB-DPB-Q0O', 'the correction was not disclosed');
+});
+
+await test('an ambiguous code is never guessed between two real cards', async () => {
+  const mod = await withLegacyCards({ 'NB-AMBIG-O': 100, 'NB-AMBIG-0': 900 });
+  // A spelling that matches neither exactly, but could be either by mis-reading.
+  const look = await mod.lookupAnyCard('NB-AMBIG-L');
+  assert.equal(look.found, false, "a stranger's card was matched by guesswork");
+  // And an EXACT match must still win outright rather than being called ambiguous.
+  const exact = await mod.lookupAnyCard('NB-AMBIG-O');
+  assert.equal(exact.found, true);
+  assert.equal(exact.balance, 100);
+  assert.equal(exact.correctedFrom, undefined, 'an exact hit was reported as a correction');
+});
+
+await test('a genuinely unknown code is not rescued by variants', async () => {
+  const mod = await withLegacyCards({});
+  const look = await mod.lookupAnyCard('NB-NOPE-0000-1111');
+  assert.equal(look.found, false);
 });
 
 console.log(results.join('\n'));
