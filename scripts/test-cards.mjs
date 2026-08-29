@@ -20,6 +20,7 @@ const {
   lookupAnyCard, getCard, basketCards, isExpired, daysLeft,
   STATUS, RESERVE_HOURS, REMIND_HOURS,
   VALID_DAYS, MAX_DELIVERY_DAYS, EXPIRY_REMIND_DAYS, EXTENSION_DAYS, EXTENSION_FEE_GHS,
+  extensionFee, quoteExtension, GRACE_DAYS, EXTENSION_FEES,
 } = await import('../src/cards.js');
 
 const DAY = 24 * 3600 * 1000;
@@ -464,6 +465,122 @@ await test('there is nothing to extend on an empty or unpaid card', () => {
   const r = reserveBasket({ ...buyer, items: [oneCard()] });
   const [reserved] = basketCards(r.reference);
   assert.equal(extendCard(reserved.code, { paymentRef: 'X' }).reason, 'not_extendable');
+});
+
+// --- the tiered fee, the grace and the override --------------------------------
+// Niobe, 29 Aug: a flat GHS 200 is more than some cards are worth. GHS 100 up to
+// GHS 300, GHS 200 above, plus the free 3 days the desk already offers first.
+
+await test('a small card is quoted the lower fee, a large one the higher', () => {
+  const small = paidCard({ amount: 150 });
+  const large = paidCard({ amount: 500 });
+  assert.equal(quoteExtension(small.code).feeGHS, 100);
+  assert.equal(quoteExtension(large.code).feeGHS, EXTENSION_FEE_GHS);
+  // The boundary is inclusive — GHS 300 is "up to 300", not "above 300".
+  const edge = paidCard({ amount: 300 });
+  assert.equal(quoteExtension(edge.code).feeGHS, 100, 'the card AT the threshold was charged the higher fee');
+});
+
+await test('the fee follows what is left on the card, not what was paid for it', () => {
+  const { code, card } = paidCard({ amount: 500 });
+  assert.equal(extensionFee(card()), EXTENSION_FEE_GHS);
+  spend(code, 400, { reason: 'Facial' });
+  // GHS 100 left. Charging 200 to rescue 100 is charging for the privilege of losing.
+  assert.equal(extensionFee(card()), 100);
+});
+
+await test('a fee that would swallow the balance is refused, not taken', () => {
+  const { code } = paidCard({ amount: 500 });
+  spend(code, 420, { reason: 'Massage' });   // GHS 80 left, cheapest fee is GHS 100
+  const res = extendCard(code, { paymentRef: 'HUB-EXT-SMALL' });
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'fee_exceeds_value', 'the customer was charged more than the card was worth');
+  assert.equal(res.balance, 80);
+  // ...and the desk is told what it CAN offer instead.
+  assert.equal(res.graceDays, GRACE_DAYS);
+  assert.equal(quoteExtension(code).worthIt, false);
+});
+
+await test('the free 3 days are free, but they name the person who gave them', () => {
+  const { code, card } = paidCard({ amount: 500 });
+  const before = card().expiresAt;
+
+  const anon = extendCard(code, { grace: true });
+  assert.equal(anon.ok, false);
+  assert.equal(anon.reason, 'grace_needs_staff', 'three days were given away by nobody in particular');
+
+  const res = extendCard(code, { grace: true, by: 'Front desk — Esi' });
+  assert.equal(res.ok, true);
+  assert.equal(res.kind, 'grace');
+  assert.equal(res.feeGHS, 0);
+  assert.equal(Math.round((Date.parse(res.expiresAt) - Date.parse(before)) / DAY), GRACE_DAYS);
+  assert.equal(card().extensions[0].quotedFeeGHS, EXTENSION_FEE_GHS, 'the waived fee was not recorded');
+});
+
+await test('the grace is once per card — a repeatable grace is no expiry at all', () => {
+  const { code } = paidCard({ amount: 500 });
+  assert.equal(extendCard(code, { grace: true, by: 'Esi' }).ok, true);
+  const again = extendCard(code, { grace: true, by: 'Esi' });
+  assert.equal(again.ok, false);
+  assert.equal(again.reason, 'grace_already_used');
+  assert.ok(again.graceUsedAt);
+  assert.equal(quoteExtension(code).graceAvailable, false);
+  // The paid extension is still on the table afterwards.
+  assert.equal(extendCard(code, { paymentRef: 'HUB-EXT-AFTER-GRACE' }).ok, true);
+});
+
+await test('the grace revives a card that has already lapsed', () => {
+  const { code, card } = paidCard({ amount: 500 });
+  card().expiresAt = new Date(Date.now() - 2 * DAY).toISOString();
+  sweepReservations(new Date());
+  assert.equal(card().status, STATUS.EXPIRED, 'precondition');
+
+  const res = extendCard(code, { grace: true, by: 'Manager — Yaw' });
+  assert.equal(res.ok, true);
+  assert.equal(card().status, STATUS.PAID);
+  assert.equal(Math.round((Date.parse(res.expiresAt) - Date.now()) / DAY), GRACE_DAYS);
+  assert.equal(spend(code, 100).ok, true);
+});
+
+await test('a discretionary fee needs a name AND a reason', () => {
+  const { code, card } = paidCard({ amount: 500 });
+
+  const waived = extendCard(code, { feeGHS: 0, paymentRef: 'HUB-X' });
+  assert.equal(waived.ok, false);
+  assert.equal(waived.reason, 'override_needs_staff_and_reason', 'the fee was waived with nobody accountable');
+  assert.equal(waived.quotedFeeGHS, EXTENSION_FEE_GHS);
+
+  const noReason = extendCard(code, { feeGHS: 50, by: 'Esi' });
+  assert.equal(noReason.reason, 'override_needs_staff_and_reason');
+
+  const ok = extendCard(code, { feeGHS: 50, by: 'Manager — Yaw', reason: 'Treatment cancelled by the branch' });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.kind, 'override');
+  assert.equal(ok.feeGHS, 50);
+  // Both numbers are kept: what the policy said, and what was actually taken.
+  assert.equal(card().extensions[0].quotedFeeGHS, EXTENSION_FEE_GHS);
+  assert.equal(card().extensions[0].reason, 'Treatment cancelled by the branch');
+});
+
+await test('paying the quoted fee is not an override and needs no reason', () => {
+  const { code } = paidCard({ amount: 150 });
+  const res = extendCard(code, { feeGHS: 100, paymentRef: 'HUB-EXT-QUOTED' });
+  assert.equal(res.ok, true);
+  assert.equal(res.kind, 'paid');
+  assert.equal(res.feeGHS, 100);
+});
+
+await test('the reminder quotes the price of THIS card', () => {
+  const { code, card } = paidCard({ amount: 150, recipientEmail: 'kofi@example.com' });
+  card().expiresAt = new Date(Date.now() + (EXPIRY_REMIND_DAYS - 1) * DAY).toISOString();
+  const hit = sweepReservations(new Date()).expiringSoon.find((e) => e.code === code);
+  assert.equal(hit.extendFeeGHS, 100, 'the holder of a GHS 150 card was quoted the GHS 200 fee');
+});
+
+await test('the tier table is ordered and open-ended', () => {
+  assert.equal(EXTENSION_FEES[EXTENSION_FEES.length - 1].upTo, null, 'the top tier must catch every card above it');
+  const caps = EXTENSION_FEES.map((t) => t.upTo ?? Infinity);
+  assert.deepEqual(caps, [...caps].sort((a, b) => a - b), 'tiers are read cheapest-first and must be sorted');
 });
 
 // --- what the customer is told ------------------------------------------------

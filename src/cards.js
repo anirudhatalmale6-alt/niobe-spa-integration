@@ -38,9 +38,12 @@ import { lookupSimpleSpaCard } from './sscards.js';
 //   - 14 days before expiry the holder is reminded, with a booking link — Niobe's
 //     customers complain about phoning to book and not getting through, so a reminder
 //     that says "ring the branch" is the reminder that gets ignored.
-//   - Expiry can be extended by 30 days for GHS 200, per card. That is a paid change to
+//   - Expiry can be extended by 30 days for a fee, per card. That is a paid change to
 //     a bearer instrument, so it needs a payment reference or a named member of staff;
 //     it can never be applied by accident.
+//   - The fee is tiered (29 Aug): GHS 100 up to GHS 300, GHS 200 above. Ahead of it sits
+//     a free 3-day grace, once per card, and a manual override for anything else — both
+//     of which must name the member of staff who granted them.
 //
 // Expiry is evaluated FROM THE DATE on every read, never trusted to have been written by
 // the sweep. A background job that is stopped, crashed or an hour behind must not be the
@@ -64,7 +67,56 @@ export const VALID_DAYS = Number(process.env.GIFTCARD_VALID_DAYS || 90);
 export const MAX_DELIVERY_DAYS = Number(process.env.GIFTCARD_MAX_DELIVERY_DAYS || 7);
 export const EXPIRY_REMIND_DAYS = Number(process.env.GIFTCARD_EXPIRY_REMIND_DAYS || 14);
 export const EXTENSION_DAYS = Number(process.env.GIFTCARD_EXTENSION_DAYS || 30);
-export const EXTENSION_FEE_GHS = Number(process.env.GIFTCARD_EXTENSION_FEE_GHS || 200);
+export const GRACE_DAYS = Number(process.env.GIFTCARD_GRACE_DAYS || 3);
+
+// THE EXTENSION FEE IS TIERED (Niobe, 29 Aug). A flat GHS 200 is fine on a GHS 500 card
+// and absurd on a GHS 150 one, where the fee costs more than the value it rescues — the
+// customer's only rational move is to walk away, and Niobe books the forfeit instead of
+// the fee. So: GHS 100 up to GHS 300, GHS 200 above it.
+//
+// Tiers are read as "value <= upTo → this fee", cheapest first, with the last tier
+// unbounded (upTo: null). Overridable as a compact env string — "300:100,*:200" — so the
+// thresholds are a setting the business can move, not a code change.
+function parseTiers(spec) {
+  if (!spec) return null;
+  const tiers = String(spec).split(',').map((part) => {
+    const [cap, fee] = part.split(':').map((s) => s.trim());
+    return { upTo: cap === '*' || cap === '' ? null : Number(cap), feeGHS: Number(fee) };
+  });
+  // A malformed tier table would silently mis-price every extension, so refuse it and
+  // fall back to the documented default rather than guess at what was meant.
+  const bad = tiers.some((t) => !Number.isFinite(t.feeGHS) || t.feeGHS < 0 || (t.upTo !== null && !(t.upTo > 0)));
+  if (bad || !tiers.length || tiers[tiers.length - 1].upTo !== null) {
+    console.log(`[gift-cards] WARNING ignoring malformed GIFTCARD_EXTENSION_FEES="${spec}" — using the default tiers`);
+    return null;
+  }
+  return tiers.sort((a, b) => (a.upTo ?? Infinity) - (b.upTo ?? Infinity));
+}
+export const EXTENSION_FEES = parseTiers(process.env.GIFTCARD_EXTENSION_FEES) || [
+  { upTo: 300, feeGHS: 100 },
+  { upTo: null, feeGHS: 200 },
+];
+// The headline fee — the top tier. Kept as a named export because it is what gets quoted
+// in copy ("extend for GHS 200"), but nothing should CHARGE this without asking
+// extensionFee() what this particular card costs.
+export const EXTENSION_FEE_GHS = EXTENSION_FEES[EXTENSION_FEES.length - 1].feeGHS;
+
+// Which number the tier is read against. The default is the REMAINING BALANCE, because
+// that is what the customer is actually buying back — a GHS 500 card with GHS 90 left is
+// a GHS 90 decision, and pricing it off the face value would land back in exactly the
+// trap the tiers exist to avoid. Set to 'face' if Niobe would rather price off what was
+// originally paid.
+export const EXTENSION_FEE_BASIS = (process.env.GIFTCARD_EXTENSION_FEE_BASIS || 'balance').toLowerCase();
+
+export function extensionValue(card) {
+  const v = EXTENSION_FEE_BASIS === 'face' ? card?.faceValue : card?.balance;
+  return Number(v || 0);
+}
+export function extensionFee(card) {
+  const v = extensionValue(card);
+  for (const t of EXTENSION_FEES) if (t.upTo === null || v <= t.upTo) return money(t.feeGHS);
+  return money(EXTENSION_FEES[EXTENSION_FEES.length - 1].feeGHS);
+}
 
 const STATUS = {
   RESERVED: 'reserved',    // checkout started, no money yet, code withheld
@@ -270,6 +322,7 @@ export function reserveBasket({ buyerName, buyerEmail, buyerPhone, items, channe
       expiresAt: null,
       expiryRemindedAt: null,
       extensions: [],
+      graceUsedAt: null,   // the free 3 days, spendable once (see extendCard)
       paidAt: null,
       payment: null,
       transactions: [],
@@ -430,16 +483,55 @@ export function unspend(code, amount, { reason, by } = {}) {
 // Second, the new expiry runs from the CURRENT expiry, not from today — unless the card
 // has already lapsed, in which case it runs from today. Nobody should pay GHS 200 for
 // thirty days and receive twenty-two because they renewed a week early.
-export function extendCard(code, { days = EXTENSION_DAYS, feeGHS = EXTENSION_FEE_GHS, paymentRef = null, by = null, reason = '' } = {}) {
+// Third, the fee is TIERED and quoted per card, and there are two ways past it, both of
+// which name a person:
+//
+//   - the GRACE extension: 3 days, free, ONCE per card. Niobe already works this way —
+//     the desk offers a few days before the fee is mentioned. Once per card matters: a
+//     grace that can be repeated is not a grace, it is an expiry that never arrives.
+//   - a manual OVERRIDE: any fee, including zero, but it must carry both a named member
+//     of staff and a reason. Discretion is fine; anonymous discretion is how a policy
+//     quietly stops existing.
+export function extendCard(code, { days, feeGHS, paymentRef = null, by = null, reason = '', grace = false } = {}) {
   const card = ledger[String(code || '').trim().toUpperCase()];
   if (!card) return { ok: false, reason: 'not_found' };
   if (![STATUS.PAID, STATUS.EXPIRED].includes(card.status)) return { ok: false, reason: 'not_extendable', status: card.status };
-  if (!paymentRef && !by) return { ok: false, reason: 'unpaid_extension' };
-  const n = Number(days);
-  if (!(n > 0 && n <= 365)) return { ok: false, reason: 'bad_days' };
-  // A spent-out card has nothing to extend; taking GHS 200 for it would be taking money
+  // A spent-out card has nothing to extend; taking a fee for it would be taking money
   // for nothing, and the customer would only discover that at the till.
   if (!(card.balance > 0)) return { ok: false, reason: 'no_balance' };
+
+  const quoted = extensionFee(card);
+  let n, fee, kind;
+
+  if (grace) {
+    // The free few days. A named person only — there is no payment reference to point at
+    // afterwards, so the record has to point at somebody.
+    if (!by) return { ok: false, reason: 'grace_needs_staff' };
+    if (card.graceUsedAt) return { ok: false, reason: 'grace_already_used', graceUsedAt: card.graceUsedAt };
+    n = Number(days ?? GRACE_DAYS);
+    fee = money(feeGHS ?? 0);
+    kind = 'grace';
+  } else {
+    n = Number(days ?? EXTENSION_DAYS);
+    fee = feeGHS == null ? quoted : money(feeGHS);
+    // An override is DETECTED, not declared — anything that is not the quoted fee is one,
+    // whether or not the caller thought to say so. A flag the caller can forget to set is
+    // a rule that only applies when somebody remembers it.
+    kind = fee === quoted ? 'paid' : 'override';
+    if (kind === 'override' && !(by && String(reason || '').trim())) {
+      return { ok: false, reason: 'override_needs_staff_and_reason', quotedFeeGHS: quoted, offeredFeeGHS: fee };
+    }
+    if (kind === 'paid') {
+      if (!paymentRef && !by) return { ok: false, reason: 'unpaid_extension', quotedFeeGHS: quoted };
+      // The tiers should already prevent this, but a fee at or above what is left on the
+      // card is never something to take silently: it has to be a deliberate override with
+      // a name against it, or the grace, or nothing.
+      if (fee >= card.balance) {
+        return { ok: false, reason: 'fee_exceeds_value', quotedFeeGHS: quoted, balance: card.balance, graceDays: card.graceUsedAt ? 0 : GRACE_DAYS };
+      }
+    }
+  }
+  if (!(n > 0 && n <= 365)) return { ok: false, reason: 'bad_days' };
 
   const now = new Date();
   const nowIso = now.toISOString();
@@ -449,13 +541,47 @@ export function extendCard(code, { days = EXTENSION_DAYS, feeGHS = EXTENSION_FEE
   // Bringing a lapsed card back to life is the whole point of a paid extension.
   if (card.status === STATUS.EXPIRED) card.status = STATUS.PAID;
   // A fresh expiry deserves a fresh reminder, otherwise the holder is warned once and
-  // never again — and quietly loses the balance they just paid GHS 200 to protect.
+  // never again — and quietly loses the balance they just paid to protect.
   card.expiryRemindedAt = null;
-  card.extensions.push({ at: nowIso, days: n, feeGHS: money(feeGHS), from: previous, to: card.expiresAt, paymentRef, by, reason });
-  card.transactions.push({ at: nowIso, type: 'extend', amount: 0, balance: card.balance, days: n, feeGHS: money(feeGHS), ref: paymentRef, by });
+  if (kind === 'grace') card.graceUsedAt = nowIso;
+  const entry = { at: nowIso, kind, days: n, feeGHS: fee, quotedFeeGHS: quoted, from: previous, to: card.expiresAt, paymentRef, by, reason };
+  card.extensions.push(entry);
+  card.transactions.push({ at: nowIso, type: 'extend', kind, amount: 0, balance: card.balance, days: n, feeGHS: fee, ref: paymentRef, by });
   saveLedger();
-  auditLog({ event: 'extended', code: mask(card.code), days: n, feeGHS: money(feeGHS), from: previous, to: card.expiresAt, paymentRef, by, reason });
-  return { ok: true, expiresAt: card.expiresAt, previousExpiry: previous, daysLeft: daysLeft(card, now), feeGHS: money(feeGHS), card: publicCard(card) };
+  auditLog({ event: 'extended', kind, code: mask(card.code), days: n, feeGHS: fee, quotedFeeGHS: quoted, from: previous, to: card.expiresAt, paymentRef, by, reason });
+  return { ok: true, kind, expiresAt: card.expiresAt, previousExpiry: previous, daysLeft: daysLeft(card, now), feeGHS: fee, quotedFeeGHS: quoted, card: publicCard(card) };
+}
+
+// What an extension would cost THIS card, for the staff screen, the reminder and the
+// customer-facing page. Quoting a flat headline fee and then charging something else at
+// the desk is how a fair policy reads as a bait and switch.
+export function quoteExtension(code) {
+  const card = ledger[String(code || '').trim().toUpperCase()];
+  if (!card) return { ok: false, reason: 'not_found' };
+  const fee = extensionFee(card);
+  const value = extensionValue(card);
+  return {
+    ok: true,
+    code: card.code,
+    masked: mask(card.code),
+    balance: card.balance,
+    faceValue: card.faceValue,
+    basis: EXTENSION_FEE_BASIS,
+    value,
+    feeGHS: fee,
+    days: EXTENSION_DAYS,
+    tiers: EXTENSION_FEES,
+    // The desk needs to know before it offers: a second free three days is not on the
+    // table, and a fee that swallows the balance needs a manager, not a card machine.
+    graceDays: GRACE_DAYS,
+    graceAvailable: !card.graceUsedAt && card.balance > 0,
+    graceUsedAt: card.graceUsedAt || null,
+    worthIt: card.balance > fee,
+    expiresAt: card.expiresAt,
+    daysLeft: daysLeft(card),
+    expired: isExpired(card),
+    extensions: (card.extensions || []).length,
+  };
 }
 
 // --- the 48-hour sweep -------------------------------------------------------
@@ -561,7 +687,9 @@ export function sweepReservations(now = new Date(), { readOnly = false } = {}) {
     // reminder must carry a way to book without phoning anybody. This is the difference
     // between a reminder that recovers the booking and one that just announces a loss.
     bookUrl: `${(CONFIG.publicUrl || '').replace(/\/$/, '')}/book?gc=${encodeURIComponent(c.code)}`,
-    extendFeeGHS: EXTENSION_FEE_GHS,
+    // The fee for THIS card, not the headline one. A reminder that quotes GHS 200 at the
+    // holder of a GHS 150 card tells them to give up, and it is not even the price.
+    extendFeeGHS: extensionFee(c),
     extendDays: EXTENSION_DAYS,
   });
 
@@ -583,7 +711,7 @@ export function sweepReservations(now = new Date(), { readOnly = false } = {}) {
 function publicCard(card, now = new Date()) {
   // An expired card still shows its code — the holder has it printed in their hand, and
   // "that code doesn't exist" is the wrong answer to someone asking why it was refused.
-  // They need to be told it lapsed, and offered the GHS 200 extension.
+  // They need to be told it lapsed, and offered the extension at this card's own price.
   const issued = card.status === STATUS.PAID || card.status === STATUS.EXPIRED;
   const expired = isExpired(card, now);
   return {
@@ -652,7 +780,7 @@ export async function lookupAnyCard(code, { skipVariants = false } = {}) {
       // What it costs to bring it back, so the page can offer the extension in the same
       // breath as the bad news rather than sending the customer to phone a branch.
       extendable: expired && own.balance > 0,
-      extendFeeGHS: EXTENSION_FEE_GHS,
+      extendFeeGHS: extensionFee(own),
       extendDays: EXTENSION_DAYS,
       valid: own.status === STATUS.PAID && own.balance > 0 && !expired,
       // Ours can be deducted automatically; the other two cannot, and the desk needs
