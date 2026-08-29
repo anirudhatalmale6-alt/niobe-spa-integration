@@ -1,0 +1,45 @@
+# Retirement of the legacy niobespagiftcard.com application.
+#
+# This file ADDS a gate. It renames nothing and deletes nothing, so the whole
+# change is undone by deleting this one file — which is the only reason it is
+# safe to apply to a live site before the database has been dumped.
+#
+# What it shuts, and why:
+#   api/       — api/callback.php sets its "was this paid?" flag from the JSON
+#                posted to it. No signature, no shared secret, no IP allow-list,
+#                and the posted Amount is never compared to the order total, so
+#                any stranger who posts a pending reference is issued a funded
+#                voucher. This is the reason the gate exists at all.
+#   backoffice/— admin login whose seed password is named by backoffice/hash.php
+#                (password_hash("admin123")). The page guards are sound; the
+#                credential is the problem, and a login nobody uses is a login
+#                nobody is watching.
+#   cron/      — reachable over HTTP as well as by the scheduler. Both scripts
+#                send customer email AND write to the database (auto-cancel,
+#                expire). Nothing that mutates rows should be triggerable by URL.
+#
+# Everything else lands on holding.html. Deliberately 410 Gone rather than 404
+# for the retired endpoints: it is accurate, and it tells any caller still
+# pointed here (Hubtel included) to stop, instead of implying a typo.
+
+Options -Indexes
+DirectoryIndex holding.html
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  # Retired application surfaces — refuse outright, before anything executes.
+  RewriteRule ^(api|backoffice|cron)(/|$) - [G,L]
+
+  # Serve the holding page itself and its assets normally.
+  RewriteRule ^holding\.html$ - [L]
+  RewriteRule ^assets/images/logo/ - [L]
+
+  # Everything else: the holding page, at the URL the visitor asked for.
+  RewriteRule ^ /holding.html [L]
+</IfModule>
+
+# Belt and braces for hosts where mod_rewrite is unavailable: still no PHP.
+<FilesMatch "\.(php|phtml|phar)$">
+  Require all denied
+</FilesMatch>
