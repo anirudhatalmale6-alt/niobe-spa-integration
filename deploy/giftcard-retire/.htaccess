@@ -10,10 +10,10 @@
 #                and the posted Amount is never compared to the order total, so
 #                any stranger who posts a pending reference is issued a funded
 #                voucher. This is the reason the gate exists at all.
-#   backoffice/— admin login whose seed password is named by backoffice/hash.php
-#                (password_hash("admin123")). The page guards are sound; the
-#                credential is the problem, and a login nobody uses is a login
-#                nobody is watching.
+#   backoffice/— admin login whose seed password is named, in plain sight, by a
+#                leftover backoffice/hash.php that prints password_hash() of a
+#                hardcoded throwaway. The page guards are sound; the credential is
+#                the problem, and a login nobody uses is a login nobody is watching.
 #   cron/      — reachable over HTTP as well as by the scheduler. Both scripts
 #                send customer email AND write to the database (auto-cancel,
 #                expire). Nothing that mutates rows should be triggerable by URL.

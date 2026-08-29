@@ -94,14 +94,11 @@ One nine-character password — weak, and of the `<symbol><digits><letters>` sha
 list would guess — was hardcoded as **both** the MySQL password (`db.php`) and the
 SMTP password for `support@niobespagiftcard.com` (`_mail_boot.php`), a mailbox able to
 send as Niobe. One string, two systems, one of which can email your customers.
-And `backoffice/hash.php` was, in its entirety:
-
-```php
-<?php echo password_hash("admin123", PASSWORD_DEFAULT);
-```
-
-That names the password the admin account was seeded with, without anyone needing to
-attempt a login. (The panel's own guards were sound — `includes/auth.php` and
+And `backoffice/hash.php` was, in its entirety, a one-line script that printed
+`password_hash()` of a hardcoded throwaway password — the sort of helper you write once
+while seeding an admin account and then forget to delete. Left in the web root, it names
+the password that account was created with, to anyone who loads the URL, without their
+ever attempting a login. (The panel's own guards were sound — `includes/auth.php` and
 `requireRole()` on every page. The credential was the weakness, not the code.)
 
 ## What was done
