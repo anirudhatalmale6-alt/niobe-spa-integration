@@ -144,7 +144,20 @@ export const CONFIG = {
   // Customer-facing service fee added to a gift-card purchase (covers GiftUp's commission +
   // card processing) — mirrors the surcharge on the GiftUp storefront. The card is worth its
   // face value; the buyer pays value x (1 + this%). Set to 0 to disable.
-  giftCardSurchargePct: Number(process.env.GIFTCARD_SURCHARGE_PCT ?? 5),
+  // 3%, set by Niobe 29 Aug 2026: "reduce the charge to 3% as it will cover website
+  // administration fees". Was 5%; the retired gift-card site also charged 3%.
+  giftCardSurchargePct: Number(process.env.GIFTCARD_SURCHARGE_PCT ?? 3),
+  // Multi-buy: buy this many cards or more in one order and the FACE VALUE subtotal is
+  // discounted by this percentage. Niobe's rule, carried over from the retired system —
+  // "5% discount for 2 or more purchases to be redeemed together".
+  // Applied discount-first, service fee on the discounted subtotal — the same order the old
+  // site used, so the receipt lines match. (The TOTAL is the same either way: 0.95 x 1.03 is
+  // 1.03 x 0.95. It is the itemisation that differs, and that is what the customer reads.)
+  giftCardMultiBuyMinQty: Number(process.env.GIFTCARD_MULTIBUY_MIN_QTY ?? 2),
+  giftCardMultiBuyDiscountPct: Number(process.env.GIFTCARD_MULTIBUY_DISCOUNT_PCT ?? 5),
+  // Upper bound on cards per order. Not a business rule so much as a guard: quantity comes
+  // from the browser, and it multiplies the amount charged.
+  giftCardMaxQuantity: Number(process.env.GIFTCARD_MAX_QUANTITY ?? 10),
 
   currency: process.env.CURRENCY || 'GHS',
   // Deposit rule: minimum 50% or pay in full (same across all services/branches).

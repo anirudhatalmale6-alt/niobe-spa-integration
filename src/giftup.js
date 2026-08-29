@@ -116,18 +116,22 @@ export function findItem(catalog, itemId) { return (catalog?.items || []).find((
 // cards:[{code,value}], downloadLinks }. `reference` is stamped as externalPaymentId for reconciliation.
 export async function issueOrder({
   value, price, itemId, purchaserName, purchaserEmail, recipient, reference,
-  sku, itemName, sendEmails = true, scheduledFor,
+  sku, itemName, sendEmails = true, scheduledFor, quantity = 1,
 } = {}) {
   if (!CONFIG.giftupKey) throw new Error('GiftUp API key not configured');
   const v = Math.round(Number(value) * 100) / 100;
   if (!(v > 0)) throw new Error('Invalid gift card value');
-  const cost = price != null ? Number(price) : v;
+  const qty = Math.max(1, Math.floor(Number(quantity) || 1));
+  const cost = price != null ? Number(price) : v * qty;
 
+  // `value` is per CARD and `price` is for the whole ORDER — they are different units, and on a
+  // multi-buy the difference is the discount. GiftUp's item price is per line, so the order total
+  // goes here once; passing the per-card price would silently bill quantity times too much.
   // When an itemId is given (a chosen package) reference it so the card inherits that item's
   // design, name and terms; GiftUp still honours the value/price we pass for a Currency card.
   const item = itemId
-    ? { id: itemId, quantity: 1, value: v, price: cost }
-    : { quantity: 1, name: itemName || 'Niobe Beauty Gift Card', backingType: 'Currency', price: cost, value: v, sku: sku || `NIOBE-GC-${v}` };
+    ? { id: itemId, quantity: qty, value: v, price: cost }
+    : { quantity: qty, name: itemName || 'Niobe Beauty Gift Card', backingType: 'Currency', price: cost, value: v, sku: sku || `NIOBE-GC-${v}` };
 
   const body = {
     orderDate: new Date().toISOString(),

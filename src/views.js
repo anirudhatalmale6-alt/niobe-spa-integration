@@ -249,6 +249,15 @@ export function renderGiftCardPage(catalog, note) {
             style="width:100%;padding:13px 14px;border:1.5px solid var(--line);border-radius:12px;font-size:16px">
         </div>
 
+        <label class="lab" style="font-size:13px;color:var(--muted);display:block;margin-top:14px">How many cards?</label>
+        <div style="display:flex;align-items:center;gap:10px;margin:6px 0 0">
+          <input name="quantity" id="qty" type="number" min="1" max="${CONFIG.giftCardMaxQuantity}" step="1" value="1" inputmode="numeric"
+            style="width:96px;padding:13px 14px;border:1.5px solid var(--line);border-radius:12px;font-size:16px">
+          <span class="sub" id="qtyHint" style="color:var(--muted);font-size:13px">
+            Buy ${CONFIG.giftCardMultiBuyMinQty} or more to be redeemed together and save ${CONFIG.giftCardMultiBuyDiscountPct}%
+          </span>
+        </div>
+
         <label class="opt" style="cursor:pointer;margin-top:14px">
           <span><span class="lab">Send it as a gift to someone else</span><br>
             <span class="sub">We'll email the voucher to them with your message</span></span>
@@ -285,6 +294,22 @@ export function renderGiftCardPage(catalog, note) {
       if(amt){f.querySelectorAll('.chip').forEach(function(c){c.addEventListener('click',function(){amt.value=c.getAttribute('data-amt');
         f.querySelectorAll('.chip').forEach(function(x){x.style.borderColor='var(--line)'});c.style.borderColor='var(--gold)';});});}
       document.getElementById('asGift').addEventListener('change',function(e){document.getElementById('recip').style.display=e.target.checked?'block':'none';});
+      // Tell the buyer the discount has applied the moment it does. The server prices the
+      // order regardless of what this says — this only reflects the rule, it never sets it.
+      (function(){
+        var q=document.getElementById('qty'), h=document.getElementById('qtyHint');
+        if(!q||!h) return;
+        var minQ=${CONFIG.giftCardMultiBuyMinQty}, pct=${CONFIG.giftCardMultiBuyDiscountPct}, maxQ=${CONFIG.giftCardMaxQuantity};
+        function upd(){
+          var n=parseInt(q.value,10);
+          if(!(n>=1)) { h.textContent='Buy '+minQ+' or more to be redeemed together and save '+pct+'%'; return; }
+          if(n>maxQ){ q.value=maxQ; n=maxQ; }
+          h.textContent = n>=minQ
+            ? pct+'% off applied — '+n+' cards, each keeping its full value'
+            : 'Buy '+minQ+' or more to be redeemed together and save '+pct+'%';
+        }
+        q.addEventListener('input',upd); q.addEventListener('change',upd); upd();
+      })();
       // Package vs custom-amount toggle: show one section and disable the other's inputs so only
       // the active field is submitted.
       var secP=document.getElementById('secPkg'),secC=document.getElementById('secCustom'),pkg=document.getElementById('pkg');
@@ -313,14 +338,32 @@ export function renderGiftCheckout(pur) {
   const feeRow = pur.feeGHS > 0
     ? `<div class="row"><span class="k">Service fee (${pur.surchargePct}%)</span><span class="v">${GHS(pur.feeGHS)}</span></div>`
     : '';
+  // On a multi-buy the buyer needs to see BOTH numbers: the discount they earned, and the fact
+  // that each card still spends its full face value. A single "you pay" line reads like the
+  // cards were reduced too.
+  const qty = pur.quantity || 1;
+  const valueRow = qty > 1
+    ? `<div class="row"><span class="k">Gift cards</span><span class="v">${qty} &times; ${GHS(pur.amount)}</span></div>
+       <div class="row"><span class="k">Subtotal</span><span class="v">${GHS(pur.subtotal ?? pur.amount * qty)}</span></div>`
+    : `<div class="row"><span class="k">Gift card value</span><span class="v">${GHS(pur.amount)}</span></div>`;
+  const discountRow = pur.discountGHS > 0
+    ? `<div class="row"><span class="k">Multi-card discount (${pur.discountPct}%)</span><span class="v">&minus;${GHS(pur.discountGHS)}</span></div>`
+    : '';
+  const keepsValueRow = qty > 1
+    ? `<div class="row"><span class="k">Each card is worth</span><span class="v">${GHS(pur.amount)}</span></div>`
+    : '';
   const amountRows = isIntl
-    ? `<div class="row"><span class="k">Gift card value</span><span class="v">${GHS(pur.amount)}</span></div>
+    ? `${valueRow}
+       ${discountRow}
        ${feeRow}
        ${rateRow}
-       <div class="row"><span class="k">Charged to your card</span><span class="v">${chargeStr}</span></div>`
-    : `<div class="row"><span class="k">Gift card value</span><span class="v">${GHS(pur.amount)}</span></div>
+       <div class="row"><span class="k">Charged to your card</span><span class="v">${chargeStr}</span></div>
+       ${keepsValueRow}`
+    : `${valueRow}
+       ${discountRow}
        ${feeRow}
-       <div class="row"><span class="k">You pay</span><span class="v">${chargeStr}</span></div>`;
+       <div class="row"><span class="k">You pay</span><span class="v">${chargeStr}</span></div>
+       ${keepsValueRow}`;
   return shell(`${name} Test Checkout`, `
     <div class="brand"><div class="n">${name} <span class="badge">TEST</span></div><div class="t">Simulated secure checkout</div></div>
     <div class="card">
