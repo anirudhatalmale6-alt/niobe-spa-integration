@@ -137,6 +137,14 @@ export const CONFIG = {
   // Key is a Bearer JWT from the GiftUp dashboard; kept server-side only (never in git).
   giftupKey: process.env.GIFTUP_API_KEY || '',
   giftupTestMode: bool(process.env.GIFTUP_TEST_MODE, false),
+  // Online gift-card sales settle into their OWN Hubtel account — Niobe, 29 Aug 2026:
+  // "Online gift card money should land in 1493". That is a different merchant account
+  // from the central booking one, and Hubtel authorises the ACCOUNT and the KEY as a pair,
+  // so all three values are required together; with any one missing, gift-card sales fall
+  // back to the central account rather than failing (see hubtel.js routeFor).
+  giftcardHubtelAccount: process.env.GIFTCARD_HUBTEL_ACCOUNT || '',
+  giftcardHubtelClientId: process.env.GIFTCARD_HUBTEL_CLIENT_ID || '',
+  giftcardHubtelClientSecret: process.env.GIFTCARD_HUBTEL_CLIENT_SECRET || '',
   // Online gift-card sales (issued via GiftUp). Amounts are in GHS (the GiftUp store currency).
   giftCardMinAmount: Number(process.env.GIFTCARD_MIN || 100),
   giftCardMaxAmount: Number(process.env.GIFTCARD_MAX || 10000),

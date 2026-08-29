@@ -1,4 +1,5 @@
 import { initializeTransaction, verifyTransaction } from './gateway.js';
+import { GIFTCARD_REF_CODE } from './hubtel.js';
 import { convertFromGHS } from './fx.js';
 import { issueOrder, getCatalog, findItem } from './giftup.js';
 import { CONFIG } from './config.js';
@@ -43,7 +44,11 @@ let seq = 0;
 function makeGiftRef() {
   seq = (seq + 1) % 1000;
   const t = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(2, 14); // YYMMDDHHMMSS
-  return `NIOBE-GC-${t}${String(seq).padStart(3, '0')}`;
+  // GIFTCARD_REF_CODE, not a literal "GC": hubtel.js reads this slot back off the
+  // reference to decide which merchant account to QUERY, having used it to decide which
+  // one to COLLECT into. If the two spellings ever drift, the money goes to 1493 and the
+  // status check asks the central account, which answers "not found" — paid, no card.
+  return `NIOBE-${GIFTCARD_REF_CODE}-${t}${String(seq).padStart(3, '0')}`;
 }
 
 const isEmail = (s) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(s || '').trim());

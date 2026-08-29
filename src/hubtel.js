@@ -8,6 +8,12 @@ const HUBTEL_STATUS = 'https://api-txnstatus.hubtel.com/transactions';
 
 export const displayName = 'Hubtel';
 
+// The code slot 1 of a gift-card reference (makeGiftRef builds NIOBE-GC-<stamp>).
+// Kept here as a named constant because routeFor and giftcards.js must agree on it:
+// if the two ever drift, the sale is COLLECTED into one Hubtel account and the status
+// QUERIED against another, which reads back "not found" and the card is never issued.
+export const GIFTCARD_REF_CODE = 'GC';
+
 function basicAuth({ clientId, clientSecret }) {
   return `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`;
 }
@@ -26,9 +32,30 @@ function basicAuth({ clientId, clientSecret }) {
 // into a branch but queried against the central account reads back as "not found"
 // and the booking would never auto-confirm.
 function routeFor({ branchId, reference }) {
+  // Online gift-card sales settle into their OWN Hubtel account (Niobe, 29 Aug 2026:
+  // "Online gift card money should land in 1493"), not a branch and not the central
+  // booking account. A gift-card reference is NIOBE-GC-<stamp>, so the code in slot 1
+  // is the literal "GC" — the same slot a branch code lives in, which is why this is
+  // decided here rather than at the two call sites.
+  const refCode = String(reference || '').split('-')[1];
+  if (refCode === GIFTCARD_REF_CODE) {
+    const gc = [CONFIG.giftcardHubtelAccount, CONFIG.giftcardHubtelClientId, CONFIG.giftcardHubtelClientSecret];
+    if (gc.every(Boolean)) {
+      return { account: gc[0], clientId: gc[1], clientSecret: gc[2] };
+    }
+    // Some but not all three set is a MISCONFIGURATION, not a choice. Falling through
+    // silently would settle gift-card money into the booking account and nobody would
+    // notice until someone reconciled two statements months later. All three empty is
+    // deliberate (no separate account yet) and stays quiet.
+    if (gc.some(Boolean)) {
+      console.log('[hubtel] WARNING gift-card sale is settling into the CENTRAL account:'
+        + ' GIFTCARD_HUBTEL_ACCOUNT/CLIENT_ID/CLIENT_SECRET are only partly set.'
+        + ' Hubtel authorises the account and the key as a pair — all three are needed.');
+    }
+  }
   const branch = branchId
     ? branchById(branchId)
-    : branchByRefCode(String(reference || '').split('-')[1]);
+    : branchByRefCode(refCode);
   if (branch?.hubtelAccount && branch.hubtelClientId && branch.hubtelClientSecret) {
     return {
       account: branch.hubtelAccount,
@@ -46,6 +73,13 @@ function routeFor({ branchId, reference }) {
 // What the branch sees on its Hubtel transaction list. Without this every line
 // reads as an anonymous deposit; with it, the branch and the payer are on the row.
 function describe(metadata, reference) {
+  // A gift-card sale is not a deposit, and it lands in a different account. Labelling it
+  // "deposit" would make the 1493 statement unreconcilable against the booking one.
+  if (metadata?.type === 'giftcard') {
+    const qty = Number(metadata?.quantity) > 1 ? `${metadata.quantity} x ` : '';
+    const who = metadata?.buyerName || '';
+    return `Niobe ${qty}gift card${who ? ` - ${who}` : ''} - ${reference}`.slice(0, 100);
+  }
   const branch = metadata?.branchId ? branchById(metadata.branchId) : null;
   const who = [metadata?.customerName, metadata?.customerPhone].filter(Boolean).join(' ');
   const base = `Niobe ${branch?.name || 'Beauty'} deposit`;
@@ -61,7 +95,10 @@ export async function initializeTransaction({ email, amount, reference, metadata
     return { authorization_url: url, reference, demo: true };
   }
 
-  const route = routeFor({ branchId: metadata?.branchId });
+  // The reference goes in as well as the branch: without it a gift-card sale would be
+  // COLLECTED into the central account here and then QUERIED against the gift-card
+  // account by verifyTransaction (which only has the reference) — "not found", no card.
+  const route = routeFor({ branchId: metadata?.branchId, reference });
   const res = await fetch(HUBTEL_INITIATE, {
     method: 'POST',
     headers: { 'Authorization': basicAuth(route), 'Content-Type': 'application/json' },
