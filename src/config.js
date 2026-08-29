@@ -188,13 +188,12 @@ export const CONFIG = {
 
   // --- Notifications (deposit-link email/SMS) ---
   // Email via Microsoft Graph (app-only) as the client's M365 mailbox.
-  notifyEmailEnabled: bool(process.env.NOTIFY_EMAIL_ENABLED, false),
-  // Mail to Niobe's OWN branch inboxes is switched separately from mail to customers.
-  // They are different decisions: the customer-facing flag is off while the deposit
-  // link goes out by SMS, but a customer who says "this is already paid for" must
-  // reach a human today. One flag for both would mean either silencing the desk or
-  // starting customer emails nobody asked for.
-  notifyStaffEmailEnabled: bool(process.env.NOTIFY_STAFF_EMAIL_ENABLED, false),
+  // There is deliberately NO on/off flag for email. Niobe asked for branch and
+  // customer mail to be permanently on, so the switch was removed rather than set
+  // to true: a switch that exists is a switch that can be flipped by accident, and
+  // mail that stops arriving is not visible to the person expecting it. Whether the
+  // server CAN send is decided by the Graph credentials below (notify.js:
+  // emailConfigured), and a missing one is logged as a WARNING, never skipped quietly.
   notifyEmailFrom: process.env.NOTIFY_EMAIL_FROM || process.env.NOTIFY_EMAIL || '',
   // Where a branch's booking team reads its mail. Falls back to a central address so a
   // branch without its own configured inbox still reaches somebody.

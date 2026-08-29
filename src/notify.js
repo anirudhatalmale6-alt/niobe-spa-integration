@@ -13,6 +13,11 @@ import { CONFIG } from './config.js';
 
 let tokenCache = { value: null, exp: 0 };
 
+// Can this server send mail at all? The only gate left on email — see sendEmail.
+export function emailConfigured() {
+  return Boolean(CONFIG.graphTenantId && CONFIG.graphClientId && CONFIG.graphClientSecret && CONFIG.notifyEmailFrom);
+}
+
 async function graphToken() {
   const now = Date.now();
   if (tokenCache.value && now < tokenCache.exp - 60000) return tokenCache.value;
@@ -39,10 +44,18 @@ async function graphToken() {
 // with an empty body on success). Never throws to the caller's flow — a failed
 // notification must not break booking/payment; it returns { ok:false, error }.
 export async function sendEmail({ to, subject, html, replyTo, internal = false }) {
-  // Mail to Niobe's own inboxes is switched independently of mail to customers — see
-  // notifyStaffEmailEnabled in config.js.
-  if (!(internal ? CONFIG.notifyStaffEmailEnabled : CONFIG.notifyEmailEnabled)) {
-    return { ok: false, skipped: internal ? 'staff_email_disabled' : 'email_disabled' };
+  // Email is deliberately NOT switchable. Niobe asked for branch and customer mail to
+  // be on permanently, with no toggle anyone could flip: a booking confirmation that
+  // silently stops going out is indistinguishable from a booking nobody made. The two
+  // old flags (NOTIFY_EMAIL_ENABLED / NOTIFY_STAFF_EMAIL_ENABLED) are gone from the
+  // code, so leaving either in a .env now does nothing at all.
+  //
+  // The one remaining condition is capability, not preference — an unconfigured Graph
+  // app physically cannot send. That case is LOUD, because with no flag to blame, a
+  // quiet skip would look exactly like a delivered mail.
+  if (!emailConfigured()) {
+    console.log(`[notify] WARNING email NOT sent to ${to} ("${subject}") — Microsoft Graph is not configured (GRAPH_TENANT_ID/CLIENT_ID/CLIENT_SECRET/NOTIFY_EMAIL_FROM)`);
+    return { ok: false, error: 'email_not_configured' };
   }
   if (!to) return { ok: false, error: 'no_recipient' };
   try {
