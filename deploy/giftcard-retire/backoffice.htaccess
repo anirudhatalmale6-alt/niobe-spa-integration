@@ -1,0 +1,28 @@
+# Retirement gate for the ADMIN PANEL, placed inside public_html/backoffice/.
+#
+# This file exists because the gate at the public_html root did NOT cover the
+# admin panel, and testing the subdomain separately is the only reason that was
+# discovered. backoffice.niobespagiftcard.com is its own vhost rooted at THIS
+# directory, so a request for /login.php never passes through the parent
+# .htaccess at all: the parent's "^(api|backoffice|cron)" pattern is matched
+# against a path that has already had "backoffice/" stripped off it, and so it
+# matches nothing. The root gate returned 410 for
+# niobespagiftcard.com/backoffice/login.php while
+# backoffice.niobespagiftcard.com/login.php was still answering 200.
+#
+# Same shape as the parent: adds a file, renames nothing, reverts by deletion.
+
+Options -Indexes
+DirectoryIndex holding.html
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteRule ^holding\.html$ - [L]
+  # Nothing here is meant to be reachable any more, by either hostname.
+  RewriteRule \.(php|phtml|phar)$ - [G,L]
+  RewriteRule ^ /holding.html [L]
+</IfModule>
+
+<FilesMatch "\.(php|phtml|phar)$">
+  Require all denied
+</FilesMatch>
