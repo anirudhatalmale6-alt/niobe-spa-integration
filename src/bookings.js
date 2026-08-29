@@ -6,6 +6,7 @@ import { BRANCHES, CONFIG, branchById } from './config.js';
 import { ssPost, findClientPayments } from './simplespa.js';
 import { isCreditClient } from './credit.js';
 import { registerHold, markSecured } from './holds.js';
+import { sendAlreadyPaidEmail } from './notify.js';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -422,12 +423,53 @@ export async function claimAlreadyPaid(bookingId, kind = 'package') {
   // clicked, because the match is on a client NAME — showing it would tell one Grace
   // Mensah what the other Grace Mensah bought.
   const branch = branchById(b.branchId);
+
+  // Tell the branch, exactly once, whether or not the lookup ever answers. A claim that
+  // reaches nobody is the bug this whole flow exists to fix, so the email must not be
+  // conditional on SimpleSpa: whichever happens first — the evidence or the deadline —
+  // sends it, and the other is dropped.
+  let notified = false;
+  const tell = (evidence, note) => {
+    if (notified) return;
+    notified = true;
+    notifyBranchOfClaim(b, k, evidence, note);
+  };
+
   if (branch && b.customer?.name) {
     findClientPayments(branch, b.customer.name, { days: 180 })
       .then((evidence) => {
         recordClaimEvidence({ bookingId: b.id, appointment_id: b.appointment_id, branchId: b.branchId, customer: b.customer?.name, evidence });
+        tell(evidence, null);
       })
-      .catch((e) => console.log(`[already-paid] evidence lookup failed for booking=${b.id}: ${e.message}`));
+      .catch((e) => {
+        console.log(`[already-paid] evidence lookup failed for booking=${b.id}: ${e.message}`);
+        tell(null, e.message);
+      });
+    setTimeout(() => tell(null, 'payment history still loading'), EVIDENCE_WAIT_MS).unref?.();
+  } else {
+    tell(null, branch ? 'no guest name on the booking' : 'unknown branch');
   }
   return b;
+}
+
+// How long the branch email waits for the payment history before going without it. The
+// lookup took ~5s against live data; the desk hearing late is worse than hearing thin.
+const EVIDENCE_WAIT_MS = Number(process.env.CLAIM_EVIDENCE_WAIT_MS || 12000);
+
+async function notifyBranchOfClaim(b, kind, evidence, note) {
+  const branch = branchById(b.branchId);
+  const to = branch?.bookingEmail || CONFIG.bookingEmailFallback;
+  if (!to) {
+    // Loud on purpose. Silence here means a guest was told "our team will confirm" and
+    // no team was told anything.
+    console.log(`[already-paid] WARNING no booking inbox for branch=${b.branchId} — claim on booking=${b.id} was NOT emailed to anyone`);
+    return;
+  }
+  const r = await sendAlreadyPaidEmail({
+    to, kind, evidence, note,
+    customer: b.customer?.name, phone: b.customer?.phone, email: b.customer?.email,
+    branchName: b.branchName, service: b.service, datetime: b.datetime, price: b.price,
+  });
+  if (r.ok) console.log(`[already-paid] branch notified: ${to} booking=${b.id}`);
+  else console.log(`[already-paid] WARNING branch NOT notified (${r.error || r.skipped}) to=${to} booking=${b.id}`);
 }

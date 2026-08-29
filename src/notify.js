@@ -38,8 +38,12 @@ async function graphToken() {
 // Send an HTML email as the configured mailbox. Returns { ok } (Graph replies 202
 // with an empty body on success). Never throws to the caller's flow — a failed
 // notification must not break booking/payment; it returns { ok:false, error }.
-export async function sendEmail({ to, subject, html, replyTo }) {
-  if (!CONFIG.notifyEmailEnabled) return { ok: false, skipped: 'email_disabled' };
+export async function sendEmail({ to, subject, html, replyTo, internal = false }) {
+  // Mail to Niobe's own inboxes is switched independently of mail to customers — see
+  // notifyStaffEmailEnabled in config.js.
+  if (!(internal ? CONFIG.notifyStaffEmailEnabled : CONFIG.notifyEmailEnabled)) {
+    return { ok: false, skipped: internal ? 'staff_email_disabled' : 'email_disabled' };
+  }
   if (!to) return { ok: false, error: 'no_recipient' };
   try {
     const token = await graphToken();
@@ -149,6 +153,60 @@ export function depositEmailHtml({ name, branchName, service, datetime, amountTe
     </div>
     <p style="font-size:12px;color:#a08b76;text-align:center;margin:16px 0 0">Niobe Beauty · where ageing is optional</p>
   </div></body></html>`;
+}
+
+// --- Staff: "this customer says it's already paid for" -----------------------
+// Goes to the BRANCH's own booking inbox. Until this existed, a customer who chose
+// "already paid" was told "our team will confirm shortly" while the only record of it
+// was a line in a log file on the server that nothing read. The promise was real to the
+// customer and invisible to Niobe.
+//
+// The email carries what the desk needs to act without opening anything else: who,
+// when, which treatment, and what that client has actually paid for lately. Reply-to is
+// set to the customer, so hitting reply reaches them rather than the sending mailbox.
+export function alreadyPaidEmailHtml({ kind, customer, phone, email, branchName, service, datetime, price, evidence, note }) {
+  const what = kind === 'package' ? 'a package already paid for'
+    : kind === 'voucher' ? 'a gift card or voucher' : 'Niobe account credit';
+  const row = (k, v) => (v ? `<tr><td style="padding:3px 14px 3px 0;color:#a08b76">${esc(k)}</td><td><strong>${esc(v)}</strong></td></tr>` : '');
+  // No evidence is NOT the same as no payments: the lookup may simply not have answered
+  // yet. Saying which one it is stops the desk reading silence as proof.
+  const ev = Array.isArray(evidence) && evidence.length
+    ? `<table style="font-size:13px;color:#4a3f38;border-collapse:collapse;margin-top:6px">
+         ${evidence.map((e) => `<tr>
+           <td style="padding:3px 12px 3px 0;color:#a08b76;white-space:nowrap">${esc(String(e.at || '').slice(0, 10))}</td>
+           <td style="padding:3px 12px 3px 0">${esc(e.description)}${e.looksLikePackage ? ' <span style="color:#8a6a3c">(package)</span>' : ''}</td>
+           <td style="padding:3px 0;text-align:right;white-space:nowrap">GHS ${esc(e.amount)}</td></tr>`).join('')}
+       </table>`
+    : Array.isArray(evidence)
+      ? `<p style="font-size:13px;color:#8a6a3c;margin:6px 0 0">No payments found under this name at this branch in the last 180 days. Worth checking the name spelling, another branch, or a gift card bought online.</p>`
+      : `<p style="font-size:13px;color:#8a6a3c;margin:6px 0 0">Their payment history could not be read just now${note ? ` (${esc(note)})` : ''} — please check it in SimpleSpa.</p>`;
+
+  return `<!doctype html><html><body style="margin:0;background:#f6f1ec;font-family:Georgia,'Times New Roman',serif;color:#2b2320">
+  <div style="max-width:600px;margin:0 auto;padding:24px 20px">
+    <div style="background:#fffdfb;border:1px solid #e9ddd2;border-radius:14px;padding:24px">
+      <h1 style="margin:0 0 6px;font-size:19px;font-weight:normal">Guest says this booking is already paid for</h1>
+      <p style="font-size:14px;color:#4a3f38;margin:0 0 16px">No deposit was taken and the slot is being held. Please check it and confirm the appointment in SimpleSpa — or call the guest if it doesn't match.</p>
+      <table style="font-size:14px;color:#6b5d53;line-height:1.7;border-collapse:collapse">
+        ${row('Guest', customer)}${row('Phone', phone)}${row('Email', email)}
+        ${row('They say', what)}${row('Branch', branchName)}${row('Treatment', service)}
+        ${row('When', datetime)}${row('Treatment price', price ? `GHS ${price}` : '')}
+      </table>
+      <p style="font-size:14px;color:#4a3f38;margin:18px 0 0"><strong>What we can see they've paid for (last 180 days, this branch):</strong></p>
+      ${ev}
+    </div>
+    <p style="font-size:11px;color:#a08b76;text-align:center;margin:14px 0 0">Sent automatically by the Niobe booking system.</p>
+  </div></body></html>`;
+}
+
+export async function sendAlreadyPaidEmail(claim) {
+  return sendEmail({
+    to: claim.to,
+    internal: true,
+    subject: `Already paid — ${claim.customer || 'guest'} · ${claim.service || 'appointment'} · ${claim.datetime || ''}`.trim(),
+    html: alreadyPaidEmailHtml(claim),
+    // Reply goes to the guest, not to the sending mailbox.
+    replyTo: claim.email || undefined,
+  });
 }
 
 // Convenience: build + send the deposit-link email for a booking.

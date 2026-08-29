@@ -40,16 +40,23 @@ const expresspayBranch = (prefix) => ({
   expresspayApiKey: process.env[`${prefix}_EXPRESSPAY_API_KEY`] || '',
 });
 
+// The branch's own booking inbox (e.g. el.booking@niobebeauty.com). Anything the front
+// desk has to act on goes here rather than to a central address, because "somebody at
+// head office will forward it" is how a held slot quietly expires.
+const branchInbox = (prefix) => ({
+  bookingEmail: process.env[`${prefix}_BOOKING_EMAIL`] || '',
+});
+
 // `short` is the branch's name in the client's own words, used where a column has to be
 // narrow. `stockOrder` puts the product-selling branches first and the two hotel sites
 // (which stock almost nothing) last — the order the branches read the Monday stock sheet
 // in. It orders the stock views only; it is not a general branch ordering.
 export const BRANCHES = [
-  { id: 'east_legon',     name: 'East Legon',          short: 'East Legon',  stockOrder: 1, key: process.env.EAST_LEGON_KEY,     hours: STD_WEEK,   ...hubtelBranch('EAST_LEGON'),     ...expresspayBranch('EAST_LEGON') },
-  { id: 'cantonments',    name: 'Cantonments',         short: 'Cantonments', stockOrder: 2, key: process.env.CANTONMENTS_KEY,    hours: STD_WEEK,   ...hubtelBranch('CANTONMENTS'),    ...expresspayBranch('CANTONMENTS') },
-  { id: 'african_regent', name: 'African Regent Hotel',short: 'AR',          stockOrder: 5, key: process.env.AFRICAN_REGENT_KEY, hours: HOTEL_WEEK, ...hubtelBranch('AFRICAN_REGENT'), ...expresspayBranch('AFRICAN_REGENT') },
-  { id: 'hfc_c18',        name: 'HFC Community 18',     short: 'C18',        stockOrder: 3, key: process.env.HFC_C18_KEY,        hours: STD_WEEK,   ...hubtelBranch('HFC_C18'),        ...expresspayBranch('HFC_C18') },
-  { id: 'alisa_hotel',    name: 'Alisa Hotel Tema',    short: 'Alisa',       stockOrder: 4, key: process.env.ALISA_HOTEL_KEY,    hours: HOTEL_WEEK, ...hubtelBranch('ALISA_HOTEL'),    ...expresspayBranch('ALISA_HOTEL') },
+  { id: 'east_legon',     name: 'East Legon',          short: 'East Legon',  stockOrder: 1, key: process.env.EAST_LEGON_KEY,     hours: STD_WEEK,   ...hubtelBranch('EAST_LEGON'),     ...expresspayBranch('EAST_LEGON'), ...branchInbox('EAST_LEGON') },
+  { id: 'cantonments',    name: 'Cantonments',         short: 'Cantonments', stockOrder: 2, key: process.env.CANTONMENTS_KEY,    hours: STD_WEEK,   ...hubtelBranch('CANTONMENTS'),    ...expresspayBranch('CANTONMENTS'), ...branchInbox('CANTONMENTS') },
+  { id: 'african_regent', name: 'African Regent Hotel',short: 'AR',          stockOrder: 5, key: process.env.AFRICAN_REGENT_KEY, hours: HOTEL_WEEK, ...hubtelBranch('AFRICAN_REGENT'), ...expresspayBranch('AFRICAN_REGENT'), ...branchInbox('AFRICAN_REGENT') },
+  { id: 'hfc_c18',        name: 'HFC Community 18',     short: 'C18',        stockOrder: 3, key: process.env.HFC_C18_KEY,        hours: STD_WEEK,   ...hubtelBranch('HFC_C18'),        ...expresspayBranch('HFC_C18'), ...branchInbox('HFC_C18') },
+  { id: 'alisa_hotel',    name: 'Alisa Hotel Tema',    short: 'Alisa',       stockOrder: 4, key: process.env.ALISA_HOTEL_KEY,    hours: HOTEL_WEEK, ...hubtelBranch('ALISA_HOTEL'),    ...expresspayBranch('ALISA_HOTEL'), ...branchInbox('ALISA_HOTEL') },
 ];
 
 // The 4-char branch code embedded in a payment reference (NIOBE-<BR4>-<stamp>).
@@ -182,7 +189,16 @@ export const CONFIG = {
   // --- Notifications (deposit-link email/SMS) ---
   // Email via Microsoft Graph (app-only) as the client's M365 mailbox.
   notifyEmailEnabled: bool(process.env.NOTIFY_EMAIL_ENABLED, false),
+  // Mail to Niobe's OWN branch inboxes is switched separately from mail to customers.
+  // They are different decisions: the customer-facing flag is off while the deposit
+  // link goes out by SMS, but a customer who says "this is already paid for" must
+  // reach a human today. One flag for both would mean either silencing the desk or
+  // starting customer emails nobody asked for.
+  notifyStaffEmailEnabled: bool(process.env.NOTIFY_STAFF_EMAIL_ENABLED, false),
   notifyEmailFrom: process.env.NOTIFY_EMAIL_FROM || process.env.NOTIFY_EMAIL || '',
+  // Where a branch's booking team reads its mail. Falls back to a central address so a
+  // branch without its own configured inbox still reaches somebody.
+  bookingEmailFallback: process.env.BOOKING_EMAIL || '',
   graphTenantId: process.env.GRAPH_TENANT_ID || '',
   graphClientId: process.env.GRAPH_CLIENT_ID || '',
   graphClientSecret: process.env.GRAPH_CLIENT_SECRET || '',
