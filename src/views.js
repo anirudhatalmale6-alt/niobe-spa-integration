@@ -82,11 +82,15 @@ export function renderPayPage(bd) {
         ${backup ? `<button class="btnAlt" type="submit" name="gateway" value="${backup}">Having trouble? Pay with ${displayNameOf(backup)} instead</button>` : ''}
         ${CONFIG.intlCurrency ? `<button class="btnAlt" type="submit" name="gateway" value="international">Paying from abroad? Pay in ${CONFIG.intlCurrency}</button>` : ''}
       </form>
-      <div class="sep">Already have a gift card or credit?</div>
-      ${CONFIG.giftupKey ? `<a class="btnAlt" href="/pay/gift-card?booking=${encodeURIComponent(b.id)}">🎁 Redeem a Niobe gift card</a>` : ''}
-      <form method="POST" action="/pay/credit-claim" style="margin-top:2px">
+      <div class="sep">Already paid for this treatment?</div>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 10px;text-align:center">
+        Don't pay twice. If this appointment is covered by a package you have already bought,
+        a gift card, or credit on your account, choose it here instead.</p>
+      ${CONFIG.giftupKey ? `<a class="btnAlt" href="/pay/gift-card?booking=${encodeURIComponent(b.id)}">🎁 I have a gift card or voucher code</a>` : ''}
+      <form method="POST" action="/pay/prepaid-claim" style="margin-top:2px">
         <input type="hidden" name="bookingId" value="${b.id}">
-        <button class="btnAlt" type="submit">I'm paying with my Niobe account credit</button>
+        <button class="btnAlt" type="submit" name="kind" value="package">This is part of a package I've already paid for</button>
+        <button class="btnAlt" type="submit" name="kind" value="credit" style="margin-top:2px">I'm paying with my Niobe account credit</button>
       </form>
       <div class="note">Payments are processed securely by ${GATEWAY}${backup ? ` (or ${displayNameOf(backup)} as a backup)` : ''} — cards, mobile money and bank transfer.<br>A minimum of ${bd.options[0].amount ? Math.round((bd.options[0].amount / bd.price) * 100) : 50}% is required to hold your slot.${feeLine}</div>
     </div>`);
@@ -96,8 +100,13 @@ export function renderPayPage(bd) {
 // booking is NOT yet confirmed — it's flagged for staff to verify the credit and confirm.
 export function renderCreditClaim(booking) {
   const b = booking || {};
-  return shell('Account credit — pending confirmation', `
-    <div class="brand"><div class="n">Niobe Beauty</div><div class="t">Account credit</div></div>
+  const kind = b.creditClaim?.kind || 'credit';
+  const what = kind === 'package'
+    ? 'a package you have already paid for'
+    : kind === 'voucher' ? 'a gift card or voucher' : 'your Niobe account credit';
+  const title = kind === 'package' ? 'Package' : kind === 'voucher' ? 'Gift card' : 'Account credit';
+  return shell(`${title} — pending confirmation`, `
+    <div class="brand"><div class="n">Niobe Beauty</div><div class="t">${title}</div></div>
     <div class="card center">
       <div class="tick">✓</div>
       <h2>No payment taken — we'll confirm shortly</h2>
@@ -106,7 +115,7 @@ export function renderCreditClaim(booking) {
         ${b.branchName ? `<div class="row"><span class="k">Branch</span><span class="v">${b.branchName}</span></div>` : ''}
         ${b.datetime ? `<div class="row"><span class="k">Date &amp; time</span><span class="v">${b.datetime}</span></div>` : ''}
       </div>
-      <div class="note">You've told us you're paying from your Niobe account credit, so no deposit has been charged. Our team will check your account balance and confirm this appointment for you. If there's any issue with the credit, we'll reach out to you directly.</div>
+      <div class="note">You've told us this appointment is covered by ${what}, so no deposit has been charged and your slot is being held. Our team will check it against your record and confirm the appointment for you. If anything doesn't match, we'll contact you directly — you don't need to do anything else.</div>
     </div>`);
 }
 
@@ -118,6 +127,7 @@ export function renderPhoneEntry(branchId, branchName, note) {
     <div class="card">
       <h2 style="margin-top:2px">Pay your deposit</h2>
       <p style="color:var(--muted);font-size:14px;margin:0 0 14px">Enter the mobile number you used when booking to bring up your appointment. No country code (e.g. +233) and no leading zero.</p>
+      <p style="color:var(--muted);font-size:13px;margin:0 0 14px">Already paid — a package, a gift card or account credit? Find your appointment here first, then choose "Already paid for this treatment" on the next screen. You won't be charged again.</p>
       ${note ? `<div class="note" style="color:#b0492e;margin:0 0 12px">${note}</div>` : ''}
       <form method="GET" action="/pay">
         <input type="hidden" name="b" value="${branchId || ''}">

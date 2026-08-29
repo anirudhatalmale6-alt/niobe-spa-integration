@@ -107,7 +107,8 @@ export async function sendSMS({ to, content }) {
 
 // A booking's deposit-link SMS — short, with the pay link.
 export async function sendDepositSMS({ to, branchName, payUrl, deadlineText }) {
-  const content = `Niobe Beauty: your ${branchName || ''} booking is held. Secure it with your deposit${deadlineText ? ' by ' + deadlineText : ''}: ${payUrl}`.replace(/\s+/g, ' ').trim();
+  // Same reason as the email footer: the "already paid" way out has to travel with the ask.
+  const content = `Niobe Beauty: your ${branchName || ''} booking is held. Secure it with your deposit${deadlineText ? ' by ' + deadlineText : ''}: ${payUrl} Already paid? Choose "Already paid" on that page.`.replace(/\s+/g, ' ').trim();
   return sendSMS({ to, content });
 }
 
@@ -135,6 +136,16 @@ export function depositEmailHtml({ name, branchName, service, datetime, amountTe
         <a href="${safeUrl}" style="background:#b08a54;color:#2b2320;text-decoration:none;font-weight:bold;padding:13px 30px;border-radius:26px;display:inline-block;font-family:Arial,sans-serif;font-size:15px">Pay deposit &amp; secure slot</a>
       </div>
       <p style="font-size:12px;color:#a08b76;text-align:center;margin:14px 0 0">If the button doesn't work, copy this link:<br><span style="color:#8a6a3c">${safeUrl}</span></p>
+      <!-- The reason this line exists: customers holding a prepaid package or a voucher were
+           reading a single "pay deposit" button, concluding they were being charged twice,
+           and emailing the branch instead. The way out has to be in the same message that
+           asks for the money — not one click further in, where they never look. -->
+      <p style="font-size:13px;line-height:1.5;color:#4a3f38;margin:18px 0 0;padding-top:14px;border-top:1px solid #efe4d8">
+        <strong>Already paid for this treatment?</strong> If it's covered by a package you've already bought,
+        a gift card or credit on your account, open the same link and choose
+        <em>"Already paid for this treatment"</em> — no deposit is taken, we hold your slot and the
+        team confirms it for you. Please don't pay twice.
+      </p>
     </div>
     <p style="font-size:12px;color:#a08b76;text-align:center;margin:16px 0 0">Niobe Beauty · where ageing is optional</p>
   </div></body></html>`;

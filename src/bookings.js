@@ -3,7 +3,7 @@ import { initializeTransaction, verifyTransaction } from './gateway.js';
 import { confirmAppointment } from './confirm.js';
 import { convertFromGHS } from './fx.js';
 import { BRANCHES, CONFIG, branchById } from './config.js';
-import { ssPost } from './simplespa.js';
+import { ssPost, findClientPayments } from './simplespa.js';
 import { isCreditClient } from './credit.js';
 import { registerHold, markSecured } from './holds.js';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'fs';
@@ -32,7 +32,19 @@ function recordCreditClaim(entry) {
     mkdirSync(DATA_DIR, { recursive: true });
     appendFileSync(join(DATA_DIR, 'credit-claims.log'), JSON.stringify(entry) + '\n');
   } catch { /* logging must never break the customer flow */ }
-  console.log(`[credit-claim] booking=${entry.bookingId} branch=${entry.branchId} appt=${entry.appointment_id} phone=${entry.phone} — needs staff verify + manual confirm`);
+  console.log(`[already-paid:${entry.kind || 'credit'}] booking=${entry.bookingId} branch=${entry.branchId} appt=${entry.appointment_id} phone=${entry.phone} — needs staff verify + manual confirm`);
+}
+
+// What this client has paid for recently, appended against the claim above once SimpleSpa
+// answers. Separate line, same bookingId, so the slow lookup can never delay the customer.
+function recordClaimEvidence(entry) {
+  const found = (entry.evidence || []).length;
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    appendFileSync(join(DATA_DIR, 'credit-claims.log'), JSON.stringify({ event: 'evidence', at: new Date().toISOString(), ...entry }) + '\n');
+  } catch { /* logging must never break the customer flow */ }
+  const packages = (entry.evidence || []).filter((e) => e.looksLikePackage).length;
+  console.log(`[already-paid] evidence booking=${entry.bookingId} — ${found} payment${found === 1 ? '' : 's'} on "${entry.customer}" in the last 180 days${packages ? `, ${packages} look like a package` : ''}`);
 }
 
 // A booking here is an existing SimpleSpa appointment that this service attaches a deposit
@@ -363,19 +375,59 @@ export function getPayment(reference) { return payments.get(reference); }
 // truly has credit before confirming it manually in SimpleSpa. This is the controlled gate
 // that lets a genuine credit-friend skip the deposit without letting anyone slip through.
 export async function claimAccountCredit(bookingId) {
+  return claimAlreadyPaid(bookingId, 'credit');
+}
+
+// The general case, added 29 Aug 2026 after Niobe reported the same customer question over
+// and over: "I have been asked to make a deposit, but my package is already paid for and
+// there is nowhere to give my voucher code."
+//
+// They were right, and the gap was ours. The deposit email had ONE button (pay), the pay
+// page offered a gift card or account credit — and a PREPAID PACKAGE is neither of those
+// words. A customer holding a package that says "100% DEPOSIT REQUIRED TO BOOK" on the
+// receipt reads the page, finds nothing that describes them, and emails the branch.
+//
+// This cannot be detected automatically: a SimpleSpa appointment carries no money and no
+// package link (verified against live data). So the honest design is to let the customer
+// SAY it, take nothing, hold the slot, and put the evidence in front of staff.
+const CLAIM_KINDS = {
+  package: 'a prepaid package or treatment course',
+  voucher: 'a gift card or voucher',
+  credit: 'Niobe account credit',
+};
+export async function claimAlreadyPaid(bookingId, kind = 'package') {
   const b = await getBooking(bookingId);
   if (!b) return null;
+  const k = CLAIM_KINDS[kind] ? kind : 'package';
   b.status = 'credit_claim_pending';
-  b.creditClaim = { at: new Date().toISOString() };
-  // A self-claimed credit still needs staff to verify the account truly holds
-  // credit before it counts as secured — so we do NOT mark it secured here.
-  // Flag it staffAuth so its release deadline rolls into business hours, giving
-  // front desk a fair window to verify before the slot would be released.
+  b.creditClaim = { at: new Date().toISOString(), kind: k };
+  // A self-claimed prepayment still needs staff to verify it before it counts as secured —
+  // so we do NOT mark it secured here. staffAuth rolls the release deadline into business
+  // hours, giving front desk a fair window to check before the slot would be released.
   registerHold(b.appointment_id, { branchId: b.branchId, staffAuth: true, reason: 'credit_claim_pending' });
+
+  // The claim is recorded FIRST and the customer is answered immediately. The slot is
+  // already held at this point, so nothing here is allowed to depend on SimpleSpa being
+  // up or quick — paging six months of transactions took five seconds against live data.
   recordCreditClaim({
-    bookingId: b.id, appointment_id: b.appointment_id, branchId: b.branchId, branchName: b.branchName,
+    kind: k, bookingId: b.id, appointment_id: b.appointment_id, branchId: b.branchId, branchName: b.branchName,
     customer: b.customer?.name, phone: b.customer?.phone, service: b.service, datetime: b.datetime,
     price: b.price, at: b.creditClaim.at,
   });
+
+  // Then do the desk's lookup for them, in the background: what has this client actually
+  // paid for lately? It lands as a second line against the same booking id.
+  //
+  // Evidence goes to the STAFF record ONLY. It is never rendered back to the person who
+  // clicked, because the match is on a client NAME — showing it would tell one Grace
+  // Mensah what the other Grace Mensah bought.
+  const branch = branchById(b.branchId);
+  if (branch && b.customer?.name) {
+    findClientPayments(branch, b.customer.name, { days: 180 })
+      .then((evidence) => {
+        recordClaimEvidence({ bookingId: b.id, appointment_id: b.appointment_id, branchId: b.branchId, customer: b.customer?.name, evidence });
+      })
+      .catch((e) => console.log(`[already-paid] evidence lookup failed for booking=${b.id}: ${e.message}`));
+  }
   return b;
 }

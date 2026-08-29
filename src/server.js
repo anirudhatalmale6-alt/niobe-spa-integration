@@ -6,7 +6,7 @@ import { CONFIG, branchById } from './config.js';
 import { getConsolidatedStock, stockCsv, stockCsvFilename } from './stock.js';
 import { getIntlPayments, intlPaymentsCsv, intlPaymentsCsvFilename } from './intlpay.js';
 import { getUnifiedAvailability, listServiceNames } from './availability.js';
-import { getBooking, bookingDeposit, startDeposit, finalizeDeposit, listBookings, getPayment, lookupBookings, claimAccountCredit } from './bookings.js';
+import { getBooking, bookingDeposit, startDeposit, finalizeDeposit, listBookings, getPayment, lookupBookings, claimAlreadyPaid } from './bookings.js';
 import { startPurchase, finalizePurchase, getPurchase } from './giftcards.js';
 import { sweepAll, sweepBranchReport, listHolds, startSweepLoop, secureAndConfirm } from './holds.js';
 import { getCatalog } from './giftup.js';
@@ -201,7 +201,11 @@ const server = createServer(async (req, res) => {
       // the customer back to the working payment options rather than into a form
       // that can only ever fail.
       if (!CONFIG.giftupKey) return redirect(res, `/pay?booking=${encodeURIComponent(url.searchParams.get('booking') || '')}`);
-      const bd = await bookingDeposit(url.searchParams.get('booking'));
+      // Reached with no booking at all — a shared or truncated link. Say so, rather than
+      // dying inside the lookup with a 500 the customer can make no sense of.
+      const bookingParam = url.searchParams.get('booking');
+      if (!bookingParam) return html(res, 404, 'Booking not found');
+      const bd = await bookingDeposit(bookingParam);
       if (!bd) return html(res, 404, 'Booking not found');
       if (bd.exempt) return html(res, 200, renderPayPage(bd));
       return html(res, 200, renderGiftRedeemPage(bd));
@@ -230,9 +234,13 @@ const server = createServer(async (req, res) => {
       if (r.ok) return html(res, 200, renderGiftRedeemClaimed(r));
       return html(res, 200, renderGiftRedeemProblem(r));
     }
-    if (req.method === 'POST' && p === '/pay/credit-claim') {
+    // "This is already paid for" — a package, a voucher or account credit. Takes NO money,
+    // holds the slot, and puts it on the front desk's work-list. /pay/credit-claim is kept
+    // as the older name for it: links already sent to customers must not start 404ing.
+    if (req.method === 'POST' && (p === '/pay/prepaid-claim' || p === '/pay/credit-claim')) {
       const body = parseBody(await readBody(req), req.headers['content-type']);
-      const b = await claimAccountCredit(body.bookingId);
+      const kind = p === '/pay/credit-claim' ? 'credit' : body.kind;
+      const b = await claimAlreadyPaid(body.bookingId, kind);
       if (!b) return html(res, 404, 'Booking not found');
       return html(res, 200, renderCreditClaim(b));
     }
