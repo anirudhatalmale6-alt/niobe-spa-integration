@@ -242,7 +242,42 @@ default, grep the live environment and read the number off the running page.**
 - **Revoke the old site's Hubtel API key pair.** Nothing uses it any more, so this can
   be done at any time with no downtime. The central key was never exposed and does not
   need rotating.
-- **Change the database and SMTP passwords.** Safe at any time now — the site is a
-  holding page and nothing reads either.
 - **Decide the old site's long-term fate.** It is offline, not deleted. Nothing should
   be deleted until the backup above has been stored somewhere the client controls.
+
+## Credentials rotated, 30 August 2026
+
+Both halves of the shared password are dead. The database login and the
+`support@niobespagiftcard.com` mailbox now have separate, different passwords, held by
+the client and by nobody else. Neither is needed by anything that runs.
+
+Two notes for whoever reads this next.
+
+**Verifying a rotation needs the error code, not the word "denied".** Checking the old
+password after a rotation inverts the usual problem: *rejected* is the outcome you want,
+so a broken check — wrong host, unreachable server, malformed command — produces a pass.
+`ERROR 1045 (28000)` specifically means the server answered and refused the credential.
+A connect failure is `2002`/`2005`, and those would prove nothing about the password. It
+is also worth running one deliberately-wrong attempt *before* the rotation, while the
+real credential still works, to confirm the check is capable of failing at all.
+
+Related trap from the same night: hPanel's Databases page leads with a **Create a New
+MySQL Database** form. Filling in a generated password there and pressing Create does not
+change any existing password — the control is the vertical three-dot menu on the database's
+row in the list underneath. The first attempt went into the create form, and nothing
+about the panel said so; the old password simply kept working. Note too that
+`SHOW DATABASES` as that user only lists databases it holds rights on, so it cannot prove
+a stray database was *not* created — the panel's own list is the authority there.
+
+**The rotation closed the admin panel on its own.** `backoffice/login.php` loads
+`includes/db.php` on its first line, and all three copies of that file still contain the
+old password (deliberately — nothing was edited, so the retirement stays reversible). The
+login page therefore fails at the database connection before it ever reads the `employees`
+table. Together with the 410 gate and the `FilesMatch` PHP denial, that is three
+independent closures, and this third one needs no maintenance to stay true.
+
+A `status='inactive'` lock on the four admin rows was prepared and then **not run** —
+`login.php` does check `status`, so it would have worked, but it had become redundant.
+The `employees` table is untouched. If the site is ever restored, resetting those four
+logins belongs to that job, and `db.php` and `_mail_boot.php` will both need the new
+credentials anyway.
