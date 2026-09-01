@@ -31,12 +31,14 @@ writeFileSync(join(ROOT, 'data', 'duplicates-all-confirmed.csv'), rows(() => tru
 // The needs-a-human pile, kept separate on purpose: these share a phone or email but
 // the names differ, so they are shared handsets, corporate accounts and family members
 // as often as they are duplicates. Merging this file unread would fuse strangers.
-const rev = [['set','branch','matched_on','client_id','name','mobile','email','visits','created'].join(',')];
+// last_visit matters most here: two records both visited recently is the single
+// clearest sign it is two people sharing a handset, not one person twice.
+const rev = [['set','branch','matched_on','client_id','name','mobile','email','visits','created','last_visit'].join(',')];
 let n = 0;
 for (const b of Object.values(r.branches)) {
   for (const g of b.review) {
     n++;
-    for (const m of g.members) rev.push([n, b.name, g.basis, m.id, m.name, m.mobile, m.email, m.visits, m.created].map(q).join(','));
+    for (const m of g.members) rev.push([n, b.name, g.basis, m.id, m.name, m.mobile, m.email, m.visits, m.created, m.lastVisit].map(q).join(','));
   }
 }
 writeFileSync(join(ROOT, 'data', 'duplicates-needs-review.csv'), rev.join('\n'));
