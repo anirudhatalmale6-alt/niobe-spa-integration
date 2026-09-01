@@ -240,6 +240,11 @@ export const CONFIG = {
   reminderLeadMinutes: Number(process.env.REMINDER_LEAD_MINUTES || 15),
   // Public base URL of this service (used to build Paystack callback/return links).
   publicUrl: process.env.PUBLIC_URL || `http://localhost:${Number(process.env.PORT || 3000)}`,
+  // Where "Book an appointment" goes from the public balance page. Empty by default and
+  // the button is then simply not shown: sending a customer who has just seen a healthy
+  // balance to a page that cannot take a booking is worse than not offering the link at
+  // all. Set once the unified site's booking page is live.
+  bookingUrl: process.env.BOOKING_URL || '',
 
   // --- Per-branch front-desk view (holds.js / server.js /desk routes) ---
   // The per-branch read-only holds view is only reachable during office hours so

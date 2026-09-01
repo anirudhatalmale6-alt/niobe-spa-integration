@@ -641,3 +641,191 @@ export function renderGiftRedeemClaimed(r) {
       <div class="note">We've checked your gift card and held your slot. Our team at ${b.branchName || 'the branch'} will apply the card to this booking and confirm it — usually the same day. If anything needs sorting out we'll call you on the number you booked with.</div>
     </div>`);
 }
+
+// --- Public gift-card balance check -----------------------------------------
+// Reached by anyone, with input of their own choosing. Two consequences for this
+// section that do not apply anywhere else in this file:
+//
+//   1. Everything derived from what the visitor typed goes through esc(). Every other
+//      page here interpolates values this service produced; here a stranger picks them,
+//      and an unescaped one is a script injection on Niobe's own domain.
+//   2. The code is never printed in full — only the last four characters — because a
+//      gift-card code is a bearer instrument.
+
+// Minimal HTML escaping, safe in both element text and a double-quoted attribute.
+const esc = (s) => String(s == null ? '' : s)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+const BALANCE_BRAND = `<div class="brand"><div class="n">Niobe Beauty</div><div class="t">Gift card balance</div></div>`;
+
+// "4 September 2026" rather than "2026-09-04". The ISO form is unambiguous, which is
+// why it is right in a log and in the staff views — but this page is read by a customer
+// holding a paper voucher, and an expiry date is the one thing on it they may need to
+// act on. Falls back to the raw value rather than printing "Invalid Date" if either
+// upstream ever hands us a shape we did not expect.
+const prettyDate = (raw) => {
+  const s = String(raw || '').split('T')[0].split(' ')[0];
+  const d = new Date(`${s}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return s;
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+};
+
+export function renderBalancePage(prefill = '', note = '', noteKind = 'info') {
+  const colour = noteKind === 'error' ? '#a4442f' : 'var(--muted)';
+  return shell('Check your gift card balance', `
+    ${BALANCE_BRAND}
+    <div class="card">
+      <h2 style="margin-top:2px">Check your gift card balance</h2>
+      ${note ? `<div class="note" style="color:${colour};text-align:left;margin:0 0 14px">${note}</div>` : ''}
+      <form method="POST" action="/balance">
+        <input name="code" required autocomplete="off" autocapitalize="characters" spellcheck="false"
+          value="${esc(prefill)}" maxlength="32"
+          placeholder="e.g. NB-ABCD-EFGH-JKMN"
+          style="width:100%;padding:14px;border:1.5px solid var(--line);border-radius:12px;font-size:16px;
+                 font-family:ui-monospace,Menlo,monospace;text-align:center;letter-spacing:1px;text-transform:uppercase">
+        <button class="btn" type="submit">Check balance</button>
+      </form>
+      <div class="note">Your code is on your gift card or in the email it came with. It works for cards
+        bought online and for cards bought at any of our branches.</div>
+    </div>`, '');
+}
+
+// A real card with money on it. The balance is the headline because it is the only
+// thing the visitor came for.
+export function renderBalanceResult(r) {
+  const cur = r.currency || 'GHS';
+  const amount = money(r.balance ?? 0, cur);
+  const spent = r.initialBalance != null && r.balance != null && r.initialBalance > r.balance;
+  const used = r.balance != null && r.balance <= 0;
+
+  // Expiry, phrased by how close it is. "Valid until 12 December" is reassuring at 60
+  // days and useless at 2 — at 2 the number of days is the thing that matters.
+  let expiryRow = '';
+  if (r.expiresAt) {
+    const date = prettyDate(r.expiresAt);
+    const soon = r.daysLeft != null && r.daysLeft <= 14 && r.daysLeft >= 0;
+    expiryRow = `<div class="row"><span class="k">Valid until</span><span class="v"${soon ? ' style="color:#a4442f"' : ''}>${esc(date)}${
+      soon ? ` <span style="font-weight:400">(${r.daysLeft === 0 ? 'today' : `${r.daysLeft} day${r.daysLeft === 1 ? '' : 's'} left`})</span>` : ''
+    }</span></div>`;
+  }
+
+  const body = used
+    ? `<h2 class="center" style="margin-top:2px">This card has been fully used</h2>
+       <div class="note" style="text-align:left">There's no balance left on this gift card. If that doesn't look
+         right to you, please call the branch with the card to hand and we'll go through it with you.</div>`
+    : `<div class="center" style="margin:4px 0 6px">
+         <div style="font-size:13px;color:var(--muted)">Balance available</div>
+         <div style="font-size:34px;font-weight:700;color:var(--gold-deep);letter-spacing:-.5px">${amount}</div>
+       </div>`;
+
+  return shell('Your gift card balance', `
+    ${BALANCE_BRAND}
+    <div class="card">
+      ${body}
+      <div class="row"><span class="k">Card</span><span class="v">••••&nbsp;${esc(r.last4)}</span></div>
+      ${spent ? `<div class="row"><span class="k">Original value</span><span class="v">${money(r.initialBalance, cur)}</span></div>` : ''}
+      ${expiryRow}
+      ${r.branchName ? `<div class="row"><span class="k">Issued at</span><span class="v">${esc(r.branchName)}</span></div>` : ''}
+      ${r.corrected ? `<div class="note" style="text-align:left;margin-top:12px">We couldn't find the code exactly as
+        you typed it, but one very close to it matched — so please check the last four characters above are the ones
+        on your card before you rely on this.</div>` : ''}
+      ${used || !CONFIG.bookingUrl ? '' : `<a class="btn" href="${esc(CONFIG.bookingUrl)}" style="margin-top:16px">Book an appointment</a>`}
+      ${r.selfService === false ? `<div class="note" style="text-align:left">This is one of our earlier gift cards.
+        It's perfectly valid — our team applies it for you at the branch rather than it coming off automatically
+        online.</div>` : ''}
+      <a class="btnAlt" href="/balance">Check another card</a>
+    </div>`, '');
+}
+
+// Expired, but with money still on it. Two things have to be true of this page at once:
+// it must not pretend the card still works, and it must not read as a refusal — the
+// balance is real and Niobe's own policy is that it can be brought back for a fee. So
+// the offer sits next to the bad news rather than behind a phone call.
+export function renderBalanceExpired(r) {
+  const cur = r.currency || 'GHS';
+  const worthIt = r.extendFeeGHS != null && r.balance != null && r.balance > r.extendFeeGHS;
+  return shell('Your gift card has expired', `
+    ${BALANCE_BRAND}
+    <div class="card">
+      <h2 style="margin-top:2px">This gift card has passed its expiry date</h2>
+      <div class="row"><span class="k">Card</span><span class="v">••••&nbsp;${esc(r.last4)}</span></div>
+      <div class="row"><span class="k">Balance still on it</span><span class="v">${money(r.balance ?? 0, cur)}</span></div>
+      ${r.expiresAt ? `<div class="row"><span class="k">Expired on</span><span class="v">${esc(prettyDate(r.expiresAt))}</span></div>` : ''}
+      ${r.extendable && worthIt ? `
+        <div class="sep">You can bring it back</div>
+        <div class="note" style="text-align:left;margin-top:0">
+          We can extend this card by ${r.extendDays} days for ${money(r.extendFeeGHS, 'GHS')}. Give us a call or
+          drop into any branch with the card and we'll sort it out — the balance above is untouched and stays yours.
+        </div>` : `
+        <div class="note" style="text-align:left">
+          Please give us a call and we'll see what we can do for you — there's still ${money(r.balance ?? 0, cur)}
+          on this card and we'd rather you had the treatment than lost it.
+        </div>`}
+      <a class="btnAlt" href="/balance">Check another card</a>
+    </div>`, '');
+}
+
+// Not a card, or we could not tell. The distinction between those two is the entire
+// point of this function, so they get different headings, different advice and
+// different buttons. Collapsing them into one "invalid code" message is the bug this
+// whole balance feature was written to avoid.
+export function renderBalanceProblem(r, prefill = '') {
+  const retryAfter = r.retryAfterSec ? Math.ceil(r.retryAfterSec / 60) : 1;
+  const cases = {
+    not_found: {
+      title: 'We couldn\'t find that code',
+      body: `We checked all of our gift-card systems and couldn't find that code. It's very easy to
+        mistype — please check it against your card or voucher email and try again. If it still doesn't
+        work, call the branch with the card to hand and we'll look it up for you.`,
+      retry: true,
+    },
+    bad_shape: {
+      title: 'That doesn\'t look like a gift card code',
+      body: `Our codes are made up of letters, numbers and dashes — like NB-ABCD-EFGH-JKMN. Please check
+        what you've entered and try again.`,
+      retry: true,
+    },
+    no_code: { title: 'Please enter your code', body: 'Type the code from your gift card or voucher email.', retry: true },
+    unavailable: {
+      title: 'We couldn\'t check it just now',
+      body: `This one's our side, not your card — one of our systems didn't answer. Your gift card has
+        not been affected in any way. Please try again in a minute or two.`,
+      retry: true,
+    },
+    ambiguous_code: {
+      title: 'We need to check this one by hand',
+      body: `That code could be read a couple of different ways, and we're not willing to guess which
+        card is yours. Please give us a call with the card in front of you and we'll confirm the balance
+        for you straight away.`,
+      retry: false,
+    },
+    rate_limited: {
+      title: 'Too many attempts',
+      body: `You've checked a few codes in quick succession, so we've paused this for a moment. Please
+        try again in about ${retryAfter} minute${retryAfter === 1 ? '' : 's'}. If you're stuck, call the
+        branch and we'll check the card for you.`,
+      retry: false,
+    },
+    busy: {
+      title: 'Just a moment',
+      body: `Our balance checker is unusually busy right now. Please try again in a minute — nothing is
+        wrong with your card.`,
+      retry: false,
+    },
+  };
+  const c = cases[r.reason] || cases.not_found;
+  return shell(c.title, `
+    ${BALANCE_BRAND}
+    <div class="card">
+      <h2 style="margin-top:2px">${c.title}</h2>
+      <div class="note" style="text-align:left;margin-top:0">${c.body}</div>
+      ${c.retry ? `<form method="POST" action="/balance" style="margin-top:14px">
+        <input name="code" required autocomplete="off" autocapitalize="characters" spellcheck="false"
+          value="${esc(prefill)}" maxlength="32"
+          style="width:100%;padding:14px;border:1.5px solid var(--line);border-radius:12px;font-size:16px;
+                 font-family:ui-monospace,Menlo,monospace;text-align:center;letter-spacing:1px;text-transform:uppercase">
+        <button class="btn" type="submit">Try again</button>
+      </form>` : `<a class="btnAlt" href="/balance" style="margin-top:14px">Back</a>`}
+    </div>`, '');
+}

@@ -14,8 +14,11 @@ import { verifyWebhookSignature, parseWebhookEvent, displayName as gatewayName }
 import { noteReturn as noteExpressPayReturn } from './expresspay.js';
 import { renderPayPage, renderCheckout, renderSuccess, renderPhoneEntry, renderChooser, renderNoMatch, renderCreditClaim, renderGiftCardPage, renderGiftCheckout, renderGiftCardSuccess, renderGiftCardPending,
   renderGiftRedeemPage, renderGiftRedeemCheck, renderGiftRedeemShort, renderGiftRedeemDone, renderGiftRedeemProblem,
-  renderGiftRedeemManual, renderGiftRedeemClaimed } from './views.js';
+  renderGiftRedeemManual, renderGiftRedeemClaimed,
+  renderBalancePage, renderBalanceResult, renderBalanceExpired, renderBalanceProblem } from './views.js';
 import { checkGiftCard, redeemForBooking, claimSimpleSpaCard } from './redeem.js';
+import { publicBalanceCheck, normaliseCode } from './balance.js';
+import { clientIp } from './ratelimit.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(__dirname, '..', 'public');
@@ -70,6 +73,35 @@ function readBody(req) {
 function parseBody(raw, contentType = '') {
   if (contentType.includes('application/json')) { try { return JSON.parse(raw || '{}'); } catch { return {}; } }
   return Object.fromEntries(new URLSearchParams(raw));
+}
+
+// Render the outcome of a public balance check.
+//
+// The status codes matter as much as the page. A 200 on "we couldn't reach GiftUp"
+// tells every monitor and every crawler that all is well, and this is precisely the
+// failure that must not go unnoticed: an outage in one ledger silently reported as
+// "not a valid card" is how a customer is told their real gift is worthless.
+function balanceReply(res, r, typed) {
+  const prefill = normaliseCode(typed);
+  if (r.found) {
+    // Expired-with-balance is its own page: it has to deliver bad news and the
+    // extension offer together, which neither the healthy nor the error page does well.
+    const body = r.expired && (r.balance ?? 0) > 0 ? renderBalanceExpired(r) : renderBalanceResult(r);
+    return html(res, 200, body);
+  }
+  if (r.reason === 'rate_limited' || r.reason === 'busy') {
+    res.writeHead(429, { 'Content-Type': 'text/html', 'Retry-After': String(r.retryAfterSec || 60) });
+    return res.end(renderBalanceProblem(r, prefill));
+  }
+  if (r.reason === 'unavailable') {
+    // Logged because it is an upstream fault we would otherwise never hear about — the
+    // customer is told to try again and goes away. Never log the code itself.
+    console.log(`[balance] lookup unavailable, systems unchecked: ${(r.unchecked || []).join(',') || 'unknown'}`);
+    res.writeHead(503, { 'Content-Type': 'text/html', 'Retry-After': '60' });
+    return res.end(renderBalanceProblem(r, prefill));
+  }
+  const code = r.reason === 'not_found' ? 404 : 400;
+  return html(res, code, renderBalanceProblem(r, prefill));
 }
 
 const server = createServer(async (req, res) => {
@@ -259,6 +291,27 @@ const server = createServer(async (req, res) => {
       // Route the simulated "paid" back to the right finaliser (gift-card sale vs booking deposit).
       const dest = getPurchase(ref) ? '/gift-card/callback' : '/pay/callback';
       return redirect(res, `${dest}?reference=${encodeURIComponent(ref)}`);
+    }
+
+    // --- Public gift-card balance check ------------------------------------
+    // The one page here that an anonymous stranger can drive with input of their own
+    // choosing. Rate limiting, code shape-checking and the full-code masking all live
+    // in balance.js / views.js; this route stays thin so those cannot be bypassed by
+    // someone adding a second entry point later.
+    //
+    // GET also accepts ?code= so the link in an expiry reminder email can carry the
+    // customer's code and land them straight on their balance, rather than asking a
+    // person who was just emailed about their own card to type it back in.
+    if (req.method === 'GET' && (p === '/balance' || p === '/gift-card/balance')) {
+      const code = url.searchParams.get('code');
+      if (!code) return html(res, 200, renderBalancePage());
+      const r = await publicBalanceCheck({ code, ip: clientIp(req) });
+      return balanceReply(res, r, code);
+    }
+    if (req.method === 'POST' && (p === '/balance' || p === '/gift-card/balance')) {
+      const body = parseBody(await readBody(req), req.headers['content-type']);
+      const r = await publicBalanceCheck({ code: body.code, ip: clientIp(req) });
+      return balanceReply(res, r, body.code);
     }
 
     // --- Online gift-card purchase ---

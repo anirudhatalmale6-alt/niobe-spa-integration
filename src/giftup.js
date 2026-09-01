@@ -8,7 +8,10 @@ import { CONFIG } from './config.js';
 // Zero-dependency: talks to GiftUp's REST API directly. Auth (from the GiftUp dashboard) is a
 // Bearer JWT; test-mode operations add the x-giftup-testmode header. The gift cards are
 // Currency-backed in GHS (same currency as Niobe deposits), so redemption is a straight GHS deduct.
-const GIFTUP_API = 'https://api.giftup.app';
+// Overridable so the balance-check tests can point this at a local stub. Testing the
+// "GiftUp is down" branch is the whole reason those tests exist, and there is no way to
+// ask the real GiftUp to fail on demand.
+const GIFTUP_API = process.env.GIFTUP_BASE || 'https://api.giftup.app';
 
 function headers(extra = {}) {
   const h = {

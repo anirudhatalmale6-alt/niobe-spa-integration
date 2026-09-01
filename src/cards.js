@@ -753,7 +753,12 @@ export function getCard(code) {
 // critically — distinguishes "no such card anywhere" from "one of the systems did not
 // answer". Those are opposite messages to the person standing at the desk. An outage
 // must never be reported as an invalid card.
-export async function lookupAnyCard(code, { skipVariants = false } = {}) {
+// variantCap limits the mis-read-character retry below. It exists because the public
+// balance page is reachable by anyone: there, one typed code fanning out into eight
+// speculative lookups (each of which asks GiftUp and all five branches) is an
+// amplification risk, so that caller passes a smaller number. Staff and booking flows
+// keep the full breadth — a customer on the phone is worth the extra calls.
+export async function lookupAnyCard(code, { skipVariants = false, variantCap = 8 } = {}) {
   const c = String(code || '').trim().toUpperCase();
   if (!c) return { found: false, reason: 'no_code', errors: [] };
 
@@ -845,7 +850,7 @@ export async function lookupAnyCard(code, { skipVariants = false } = {}) {
   // resolve to ONE card: if two different real cards both match, we have no way to know
   // which one is in the customer's hand, and guessing would spend a stranger's money.
   if (!skipVariants) {
-    const variants = ambiguityVariants(c);
+    const variants = ambiguityVariants(c, variantCap);
     const hits = [];
     for (const v of variants) {
       const r = await lookupAnyCard(v, { skipVariants: true });   // no recursion beyond one level
