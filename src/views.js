@@ -327,6 +327,29 @@ export function renderGiftCardPage(catalog, note) {
       .segbtn:has(input:checked){border-color:var(--gold);background:#f7efe3}.segbtn input{display:none}</style>`);
 }
 
+// The expiry belongs on the page where money is committed, not only on the voucher
+// that arrives afterwards. A 90-day limit discovered after payment is a complaint;
+// the same limit stated before it is a term of sale.
+//
+// The card does not exist yet at this point, so there is no real expiry date to
+// quote — say the rule, and say what it runs from, which is payment and not delivery.
+function validityRows(pur) {
+  const days = CONFIG.giftCardValidityDays;
+  const rows = [`<div class="row"><span class="k">Valid for</span><span class="v">${days} days from payment</span></div>`];
+  // A scheduled delivery does not move the expiry. The buyer choosing next Friday is
+  // quietly spending the recipient's window, and they can only weigh that if we say so.
+  const when = pur.scheduledFor || pur.recipient?.scheduledFor;
+  if (when) {
+    const sent = Date.parse(when);
+    const lost = Number.isFinite(sent) ? Math.max(0, Math.round((sent - Date.now()) / 86400000)) : 0;
+    if (lost > 0) {
+      rows.push(`<div class="row"><span class="k">Delivered on</span><span class="v">${esc(prettyDate(when))}</span></div>`);
+      rows.push(`<div class="note" style="margin:8px 0 0">The ${days} days run from today, not from delivery — scheduling it for ${esc(prettyDate(when))} leaves ${days - lost} days to use it.</div>`);
+    }
+  }
+  return rows.join('');
+}
+
 // Demo (test-mode) checkout for a gift-card purchase — mirrors renderCheckout but for a sale.
 export function renderGiftCheckout(pur) {
   const name = displayNameOf(pur.gateway);
@@ -372,6 +395,7 @@ export function renderGiftCheckout(pur) {
       ${pur.packageName ? `<div class="row"><span class="k">Treatment</span><span class="v">${pur.packageName}</span></div>` : ''}
       ${pur.gift ? `<div class="row"><span class="k">Gift for</span><span class="v">${pur.recipient.name}</span></div>` : ''}
       ${amountRows}
+      ${validityRows(pur)}
       <div class="row"><span class="k">Reference</span><span class="v" style="font-family:ui-monospace,monospace;font-size:12px">${pur.reference}</span></div>
       <form method="POST" action="/demo/pay" style="margin-top:16px">
         <input type="hidden" name="reference" value="${pur.reference}">
@@ -391,6 +415,26 @@ export function renderGiftCardPending() {
       <h2>Thank you — we're confirming your payment</h2>
       <div class="note">Your payment is being confirmed and your gift card voucher will be emailed to you within a few minutes. If it hasn't arrived shortly, just contact us with your payment details and we'll sort it out right away.</div>
     </div>`);
+}
+
+// "Valid for 90 days" is a duration, and it makes the holder do arithmetic from a
+// date they have to remember. Once the card is issued it has a real expiry date, so
+// show that. The duration is the fallback for the case where it somehow isn't set —
+// never silently omit the line, because a voucher with no expiry on it reads as one
+// that doesn't have one.
+//
+// This matters most for a gift: the 90 days run from the moment the BUYER paid, not
+// from the day the recipient opens the email. Someone handed a card in December that
+// was bought in October has six weeks, not thirteen, and telling them "valid for 90
+// days" is wrong by the whole difference.
+function expiryRow(card) {
+  const label = '<span class="k">Valid until</span>';
+  if (card?.expiresAt) {
+    const days = Number(card.daysLeft);
+    const tail = Number.isFinite(days) && days > 0 && days <= 30 ? ` <span style="color:#a4442f">(${days} day${days === 1 ? '' : 's'} left)</span>` : '';
+    return `<div class="row">${label}<span class="v">${esc(prettyDate(card.expiresAt))}${tail}</span></div>`;
+  }
+  return `<div class="row"><span class="k">Valid for</span><span class="v">${CONFIG.giftCardValidityDays} days from purchase</span></div>`;
 }
 
 export function renderGiftCardSuccess(result) {
@@ -417,7 +461,7 @@ export function renderGiftCardSuccess(result) {
         ${pur.packageName ? `<div class="row"><span class="k">Treatment</span><span class="v">${pur.packageName}</span></div>` : ''}
         <div class="row"><span class="k">Value</span><span class="v">${GHS(pur.amount)}</span></div>
         ${card ? `<div class="row"><span class="k">Card code</span><span class="v" style="font-family:ui-monospace,monospace">${card.code}</span></div>` : ''}
-        <div class="row"><span class="k">Valid for</span><span class="v">${CONFIG.giftCardValidityDays} days</span></div>
+        ${expiryRow(card)}
         ${pur.gift ? `<div class="row"><span class="k">Sent to</span><span class="v">${pur.recipient?.name}</span></div>` : ''}
       </div>
       <div class="note">A branded voucher has been emailed to ${to}. It can be redeemed against any service at any Niobe branch.${pdf ? `<br><a class="btnAlt" href="${pdf}" style="margin-top:12px" target="_blank" rel="noopener">Download the voucher (PDF)</a>` : ''}</div>
