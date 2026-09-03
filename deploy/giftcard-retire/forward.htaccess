@@ -1,0 +1,48 @@
+# niobespagiftcard.com -> the live checkout, WITHOUT waking the old application.
+#
+# The client's instinct was to "resuscitate niobespagiftcard.com as it is paid for".
+# The domain is worth keeping; the software behind it is not. This file separates the
+# two: the domain starts working again as a way in, and every retired surface stays
+# exactly as dead as it is today.
+#
+# It is the retirement .htaccess with ONE rule changed — the last one. Instead of
+# landing every request on holding.html, it 301s to the real checkout. Everything
+# above that line is byte-for-byte the file that is already deployed and verified,
+# and that is deliberate: the gate is the part that must not drift.
+#
+# What must NOT change, and is asserted by forward.sh after upload:
+#   api/       — api/callback.php issued a funded voucher to anyone who posted a
+#                plausible pending reference. No signature, no shared secret, and the
+#                posted amount was never compared to the order total. It stays 410.
+#   backoffice/— admin login whose seed password is printed by a leftover hash.php.
+#   cron/      — both scripts email customers AND mutate rows.
+#
+# 301 and not 302: the move is permanent, and a permanent redirect is the thing that
+# gets old links, bookmarks and search results to re-point themselves. A 302 asks
+# every visitor to keep coming back here forever.
+#
+# Retired surfaces are still refused rather than redirected. Handing a bot that is
+# probing /api/callback.php a payment page is not an improvement on telling it Gone.
+
+Options -Indexes
+DirectoryIndex holding.html
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  # Retired application surfaces — refuse outright, before anything executes.
+  RewriteRule ^(api|backoffice|cron)(/|$) - [G,L]
+
+  # Serve the holding page itself and its assets normally, so that reverting to it
+  # is one file away and the page is still reachable directly if it is ever needed.
+  RewriteRule ^holding\.html$ - [L]
+  RewriteRule ^assets/images/logo/ - [L]
+
+  # Everything else now goes to the live checkout instead of the holding page.
+  RewriteRule ^ https://pay.niobebeauty.com/gift-card [R=301,L]
+</IfModule>
+
+# Belt and braces for hosts where mod_rewrite is unavailable: still no PHP.
+<FilesMatch "\.(php|phtml|phar)$">
+  Require all denied
+</FilesMatch>
