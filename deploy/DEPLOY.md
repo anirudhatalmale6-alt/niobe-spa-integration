@@ -23,6 +23,25 @@ Type: A    Host: pay    Value: <server IP>    TTL: default
 
 Wait until `dig +short pay.niobebeauty.com` returns the server IP.
 
+### The two gift-card domains
+
+Niobe owns two other names. **Neither hosts anything — both forward here.**
+
+| domain | what it is | what it should do |
+|---|---|---|
+| `niobespagiftcard.com` | the retired legacy PHP site, on Hostinger | 301 to `pay.niobebeauty.com/gift-card` via `giftcard-retire/forward.sh` |
+| `niobegiftcard.com` | registered defensively 3 Sep 2026 (Hostinger), never used | hPanel → Domain Forwarding → same target |
+
+They forward rather than host on purpose. The checkout stays on a **subdomain of
+the domain customers already know**, because that is the part a customer can
+actually verify. A standalone gift-card domain is structurally indistinguishable
+from one a scammer would register — worth owning so nobody else does, not worth
+advertising.
+
+`niobegiftcard.com` needs no files and no hosting plan, only a forwarding rule.
+Confirm it took with `curl -sSI https://niobegiftcard.com/ | head -1` — expect a
+`301`, not a parking page.
+
 ## 3. HTTPS
 Once DNS resolves:
 
