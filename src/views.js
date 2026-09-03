@@ -10,16 +10,45 @@ const money = (n, cur = 'GHS') => cur === 'GHS'
   : `${SYMBOLS[cur] || cur + ' '}${Number(n).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const feeLine = CONFIG.customerPaysFees ? ' Any transaction fee is added at checkout and paid by the customer.' : '';
 
+// Niobe's phone numbers, as published in the header of niobebeauty.com. They are on
+// the checkout for the same reason they are on the website: a customer who is unsure
+// whether a payment page is really yours wants a way to reach a human, and a page that
+// offers none is the one that gets abandoned.
+const PHONES = ['+233 (0) 242 426 237', '+233 (0) 302 542 220', '+233 (0) 303 964 646'];
+
+// The trade brands already shown on niobebeauty.com. Same files, same order.
+const PARTNERS = ['elemis', 'murad', 'loreal-pro', 'opi'];
+
 const shell = (title, body, tag = CONFIG.paymentDemo ? `${GATEWAY} Test Mode` : '🔒 Secure checkout') => `<!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title>
 <style>
-  :root{--bg:#f6f1ec;--card:#fffdfb;--ink:#2b2320;--muted:#8b7d73;--line:#e9ddd2;--gold:#b08a54;--gold-deep:#8a6a3c;--ok:#3f7d5b}
+  :root{--bg:#f6f1ec;--card:#fffdfb;--ink:#2b2320;--muted:#8b7d73;--line:#e9ddd2;--gold:#b08a54;--gold-deep:#8a6a3c;--ok:#3f7d5b;
+    --dark:#2b2926;--dark-ink:#ddd2c7}
   *{box-sizing:border-box}body{margin:0;font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);
-    min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:34px 16px}
-  .wrap{width:100%;max-width:520px}
+    min-height:100vh;display:flex;flex-direction:column}
+  /* Header and footer mirror niobebeauty.com so the checkout is recognisably the same
+     business. The logo is white line-art on a transparent background — it is unreadable
+     on the cream page background, so the bar behind it has to stay dark. */
+  .topbar{background:#000;color:var(--dark-ink);font-size:11.5px;letter-spacing:.2px;padding:7px 14px;
+    display:flex;gap:6px 18px;align-items:center;justify-content:center;flex-wrap:wrap}
+  .topbar .ph{display:flex;gap:14px;flex-wrap:wrap;justify-content:center}
+  .topbar a{color:var(--dark-ink);text-decoration:none}
+  .topbar .tag{color:#f0e4d2}
+  .hdr{background:var(--dark);padding:13px 16px;text-align:center}
+  /* 64px, not smaller: below about 56 the "SALON & SPA" line under the wordmark
+     stops being readable and the logo reads as an anonymous squiggle. */
+  .hdr img{height:64px;width:auto;display:inline-block;vertical-align:middle}
+  .wrap{width:100%;max-width:520px;margin:0 auto;padding:30px 16px 8px;flex:1}
+  .ftr{background:var(--dark);color:#a89b8f;margin-top:38px;padding:22px 16px 26px;text-align:center;font-size:12px;line-height:1.7}
+  .ftr a{color:#c4b8ac}
+  .ftr .aw{height:74px;width:auto;margin-bottom:12px;border-radius:4px}
+  .strip{display:flex;gap:26px;align-items:center;justify-content:center;flex-wrap:wrap;margin:0 0 16px;opacity:.9}
+  /* The source files carry a lot of transparent padding, so the visible mark is roughly
+     half the box height — 38px of image is about 18px of ink. */
+  .strip img{height:38px;width:auto}
   .brand{text-align:center;margin-bottom:18px}
-  .brand .n{font-size:22px;font-weight:700;letter-spacing:.4px}
-  .brand .t{color:var(--muted);font-size:13px;margin-top:2px}
+  .brand .n{display:none}
+  .brand .t{color:var(--gold-deep);font-size:12.5px;letter-spacing:1.4px;text-transform:uppercase;font-weight:600}
   .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px 22px;box-shadow:0 6px 24px rgba(80,60,40,.06)}
   .row{display:flex;justify-content:space-between;padding:7px 0;font-size:14px;border-bottom:1px dashed var(--line)}
   .row:last-child{border-bottom:0}.row .k{color:var(--muted)}.row .v{font-weight:600;text-align:right}
@@ -45,9 +74,23 @@ const shell = (title, body, tag = CONFIG.paymentDemo ? `${GATEWAY} Test Mode` : 
   .center{text-align:center}
   .sep{display:flex;align-items:center;gap:10px;margin:16px 0 4px;color:var(--muted);font-size:12px}
   .sep:before,.sep:after{content:"";flex:1;height:1px;background:var(--line)}
-  .demoTag{position:fixed;top:10px;right:12px;font-size:11px;color:#7a5c25;background:#fbf4e8;border:1px solid #ecdcbf;padding:3px 9px;border-radius:20px}
-</style></head><body>${tag ? `<div class="demoTag">${tag}</div>` : ''}
-<div class="wrap">${body}</div></body></html>`;
+  /* Still 56px on a phone — the readability floor applies here too, and at a 600:271
+     aspect that is only ~124px wide, so it fits the narrowest handset comfortably. */
+  @media (max-width:520px){.hdr img{height:56px}.ftr .aw{height:60px}.strip{gap:18px}.strip img{height:30px}}
+</style></head><body>
+<div class="topbar">
+  <span class="ph">${PHONES.map((n) => `<a href="tel:${n.replace(/[^+\d]/g, '')}">${n}</a>`).join('')}</span>
+  ${tag ? `<span class="tag">${tag}</span>` : ''}
+</div>
+<div class="hdr"><img src="/brand/logo.png" alt="Niobe Salon &amp; Spa" width="600" height="271"></div>
+<div class="wrap">${body}</div>
+<div class="ftr">
+  <img class="aw" src="/brand/award.png" alt="World Luxury Spa Awards 2020 Winner" width="540" height="436">
+  <div class="strip">${PARTNERS.map((b) => `<img src="/brand/${b}.png" alt="${b}" width="240" height="160">`).join('')}</div>
+  Niobe Salon &amp; Spa &mdash; African Regent Hotel, East Legon, Cantonments, Community 18 and Alisa Hotel Tema<br>
+  <a href="https://www.niobebeauty.com">niobebeauty.com</a>
+</div>
+</body></html>`;
 
 export function renderPayPage(bd) {
   const b = bd.booking;
