@@ -14,26 +14,29 @@ import { CONFIG } from './config.js';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DESIGN_DIR = join(HERE, '..', 'public', 'designs');
 
-// Niobe's own artwork, carried over from the retired gift-card site. The ORDER is the order
-// they are offered in, and it is not alphabetical: the retired system recorded how often each
-// was chosen, and the classic gold ribbon was picked roughly 600 times against 22 for the next
-// most popular. That is not a close race, so it leads and it is the default. The rest follow in
-// the same popularity order.
+// Niobe's own artwork, carried over from the retired gift-card site.
 //
-// `season` marks a design that should only be offered at the right time of year — an empty
-// season means always. Niobe asked for Christmas designs to appear before 1 November.
+// The ORDER is the order they are offered in, and it is not alphabetical or arbitrary: the
+// retired system recorded how many times each design had actually been chosen, and `picks` is
+// that count. The classic gold ribbon was picked 600 times against 22 for the next most
+// popular — not a close race — so it leads and it is the default. Keeping the number here
+// rather than only the ordering means the next person can check the order against its evidence
+// instead of taking it on trust, and can re-sort it when Niobe has counts of her own.
+//
+// Ties (28/31 at two picks, 33/34/35 at one) are in file order; there is nothing to choose
+// between them and pretending otherwise would be inventing a preference.
 const CATALOGUE = [
-  { id: 'add-01', name: 'Classic gold ribbon', file: 'add-01.jpg' },
-  { id: 'add-10', name: 'Midnight & gold',     file: 'add-10.jpg' },
-  { id: 'add-12', name: 'Gold bow',            file: 'add-12.jpg' },
-  { id: 'add-13', name: 'Red gift box',        file: 'add-13.jpg' },
-  { id: 'add-16', name: 'I love you',          file: 'add-16.jpg' },
-  { id: 'add-20', name: 'To a special friend', file: 'add-20.jpg' },
-  { id: 'add-31', name: 'To my lover',         file: 'add-31.jpg' },
-  { id: 'add-28', name: 'To my husband',       file: 'add-28.jpg' },
-  { id: 'add-33', name: 'To my wife',          file: 'add-33.jpg' },
-  { id: 'add-35', name: 'Black & gold',        file: 'add-35.jpg' },
-  { id: 'add-34', name: 'Botanical white',     file: 'add-34.jpg' },
+  { id: 'add-01', name: 'Classic gold ribbon', file: 'add-01.jpg', picks: 600 },
+  { id: 'add-10', name: 'Midnight & gold',     file: 'add-10.jpg', picks: 22 },
+  { id: 'add-12', name: 'Gold bow',            file: 'add-12.jpg', picks: 18 },
+  { id: 'add-13', name: 'Red gift box',        file: 'add-13.jpg', picks: 18 },
+  { id: 'add-16', name: 'I love you',          file: 'add-16.jpg', picks: 14 },
+  { id: 'add-20', name: 'To a special friend', file: 'add-20.jpg', picks: 10 },
+  { id: 'add-28', name: 'To my husband',       file: 'add-28.jpg', picks: 2 },
+  { id: 'add-31', name: 'To my lover',         file: 'add-31.jpg', picks: 2 },
+  { id: 'add-33', name: 'To my wife',          file: 'add-33.jpg', picks: 1 },
+  { id: 'add-34', name: 'Botanical white',     file: 'add-34.jpg', picks: 1 },
+  { id: 'add-35', name: 'Black & gold',        file: 'add-35.jpg', picks: 1 },
 ];
 
 // Only offer a design whose file is actually on disk. A picker that shows eleven options and
