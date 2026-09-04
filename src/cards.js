@@ -5,6 +5,7 @@ import { randomBytes } from 'crypto';
 import { CONFIG } from './config.js';
 import { validateCard as validateGiftUpCard } from './giftup.js';
 import { lookupSimpleSpaCard } from './sscards.js';
+import { GIFTCARD_REF_CODE } from './hubtel.js';
 
 // Niobe's OWN gift-card ledger — the system of record for cards sold on the new site,
 // replacing GiftUp for new sales. GiftUp and SimpleSpa cards already in customers'
@@ -223,7 +224,13 @@ let seq = 0;
 function newReference() {
   seq = (seq + 1) % 1000;
   const t = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(2, 14);   // YYMMDDHHMMSS
-  return `NIOBE-GC-${t}${String(seq).padStart(3, '0')}`;
+  // GIFTCARD_REF_CODE, not a literal "GC". Hubtel reads this slot back off the reference to
+  // decide which merchant account to QUERY, having used it to decide which one to COLLECT
+  // into. If the two spellings ever drift, the money is collected into the gift-card account
+  // and the status check asks the central one, which answers "not found" — the buyer has paid
+  // and the sale never completes. giftcards.js already imports the constant for exactly this
+  // reason; this reference reaches the same gateway, so it must not be the one hard-coded copy.
+  return `NIOBE-${GIFTCARD_REF_CODE}-${t}${String(seq).padStart(3, '0')}`;
 }
 
 // --- validation --------------------------------------------------------------

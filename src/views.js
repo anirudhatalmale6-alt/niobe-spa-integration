@@ -2,6 +2,7 @@
 // Shared styling with the staff dashboard (warm cream + gold Niobe palette).
 import { displayName as GATEWAY, displayNameOf, backup } from './gateway.js';
 import { CONFIG } from './config.js';
+import { designs } from './voucher.js';
 
 const GHS = (n) => `GHS ${Number(n).toLocaleString('en-GH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const SYMBOLS = { GBP: '£', USD: '$', EUR: '€' };
@@ -69,6 +70,25 @@ const shell = (title, body, tag = CONFIG.paymentDemo ? `${GATEWAY} Test Mode` : 
     justify-content:center;font-size:34px;margin:2px auto 12px}
   .ref{font-family:ui-monospace,Menlo,monospace;background:#f3e9dd;border:1px solid #ecdcbf;border-radius:8px;
     padding:8px 10px;font-size:13px;word-break:break-all;text-align:center;margin:10px 0}
+  /* The design grid. 3 across on a desktop, 2 on a phone — at 3 across on a narrow screen
+     each tile is under 100px and the artwork stops being distinguishable, which defeats the
+     point of choosing. The tile is the label, so the whole thing is the hit target. */
+  .dgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  @media (max-width:520px){.dgrid{grid-template-columns:repeat(2,1fr)}}
+  .dopt{cursor:pointer;display:block;border:2px solid var(--line);border-radius:12px;padding:6px;
+    background:#fff;text-align:center;transition:border-color .12s}
+  .dopt:hover{border-color:var(--gold)}
+  .dopt input{position:absolute;opacity:0;pointer-events:none}
+  .dopt img{width:100%;height:auto;display:block;border-radius:7px}
+  .dopt span{display:block;font-size:11.5px;color:var(--muted);margin-top:5px;line-height:1.3}
+  /* :has() carries the selected state without a line of JavaScript. Every browser Niobe's
+     customers use has supported it since 2023; where it is not supported the picker still
+     works, it just does not highlight — the radio is what the form submits either way. */
+  /* The radio is hidden, so without this a keyboard user tabbing through the designs gets no
+     focus ring at all and cannot tell which tile they are on. */
+  .dopt:has(input:focus-visible){outline:2px solid var(--gold-deep);outline-offset:2px}
+  .dopt:has(input:checked){border-color:var(--gold-deep);background:#fdf8f1}
+  .dopt:has(input:checked) span{color:var(--gold-deep);font-weight:600}
   .badge{display:inline-block;font-size:11px;color:var(--gold-deep);background:#f4ead9;border:1px solid #ecdcbf;
     padding:2px 9px;border-radius:20px;margin-left:6px}
   .center{text-align:center}
@@ -276,6 +296,43 @@ export function renderGiftCardPage(catalog, note) {
           <label class="segbtn"><input type="radio" name="mode" value="custom" ${packageDefault ? '' : 'checked'}> Custom amount</label>
         </div>` : '';
 
+  // THE DESIGN PICKER, and why it appears only on our own cards.
+  //
+  // On the GiftUp route the design is inherited from the item id — the same field that carries
+  // the chosen package — so there is nowhere for this control's answer to go, and a picker
+  // there would be a lie: the buyer would choose one thing and receive another. Issuing the
+  // cards ourselves is what makes the choice expressible, so the control appears exactly when
+  // it can be honoured and not one deploy sooner.
+  const designList = CONFIG.giftcardIssuer === 'niobe' ? designs() : [];
+  const designSection = designList.length ? `
+        <div style="border-top:1px dashed var(--line);margin:16px 0 0"></div>
+        <label class="lab" style="font-size:13px;color:var(--muted);display:block;margin:14px 0 8px">Choose a design</label>
+        <div class="dgrid">
+          ${designList.map((d, i) => `
+          <label class="dopt">
+            <input type="radio" name="design" value="${d.id}"${i === 0 ? ' checked' : ''}>
+            <img src="/designs/${d.file}" alt="${d.name}" loading="lazy">
+            <span>${d.name}</span>
+          </label>`).join('')}
+        </div>` : '';
+
+  // "For those who want to print themselves" — Niobe, 3 Sep. Offered only on our own cards for
+  // the same reason as the picker: GiftUp decides its own delivery, we do not.
+  const deliverySection = designList.length ? `
+        <div id="delivery" style="display:none">
+          <label class="lab" style="font-size:13px;color:var(--muted);display:block;margin:14px 0 6px">How should it reach them?</label>
+          <label class="opt" style="cursor:pointer;margin:0 0 8px">
+            <span><span class="lab">Email it to them</span><br>
+              <span class="sub">Sent as soon as your payment clears</span></span>
+            <input type="radio" name="delivery" value="email" checked style="transform:scale(1.3)">
+          </label>
+          <label class="opt" style="cursor:pointer">
+            <span><span class="lab">I'll print it myself</span><br>
+              <span class="sub">The voucher comes to you to print and hand over</span></span>
+            <input type="radio" name="delivery" value="print" style="transform:scale(1.3)">
+          </label>
+        </div>` : '';
+
   return shell('Buy a Niobe Beauty gift card', `
     <div class="brand"><div class="n">Niobe Beauty</div><div class="t">Gift cards</div></div>
     <div class="card">
@@ -301,11 +358,15 @@ export function renderGiftCardPage(catalog, note) {
           </span>
         </div>
 
+        ${designSection}
+
         <label class="opt" style="cursor:pointer;margin-top:14px">
           <span><span class="lab">Send it as a gift to someone else</span><br>
             <span class="sub">We'll email the voucher to them with your message</span></span>
           <input type="checkbox" name="asGift" id="asGift" value="true" style="transform:scale(1.3)">
         </label>
+
+        ${deliverySection}
 
         <div id="recip" style="display:none">
           <input name="recipientName" placeholder="Recipient's name"
@@ -336,7 +397,21 @@ export function renderGiftCardPage(catalog, note) {
       var f=document.getElementById('gcform'),amt=document.getElementById('amt');
       if(amt){f.querySelectorAll('.chip').forEach(function(c){c.addEventListener('click',function(){amt.value=c.getAttribute('data-amt');
         f.querySelectorAll('.chip').forEach(function(x){x.style.borderColor='var(--line)'});c.style.borderColor='var(--gold)';});});}
-      document.getElementById('asGift').addEventListener('change',function(e){document.getElementById('recip').style.display=e.target.checked?'block':'none';});
+      document.getElementById('asGift').addEventListener('change',function(e){
+        document.getElementById('recip').style.display=e.target.checked?'block':'none';
+        var d=document.getElementById('delivery'); if(d) d.style.display=e.target.checked?'block':'none';
+      });
+      // "I'll print it myself" means the buyer hands the voucher over, so there is nobody to
+      // email and asking for the recipient's address is asking for something they may not have.
+      // The server applies the same rule; this only stops the form demanding it on screen.
+      (function(){
+        var d=document.getElementById('delivery'); if(!d) return;
+        var em=document.querySelector('input[name=recipientEmail]');
+        d.addEventListener('change',function(){
+          var post=d.querySelector('input[value=print]').checked;
+          if(em){em.style.display=post?'none':'';em.placeholder=post?'':"Recipient's email";if(post)em.value='';}
+        });
+      })();
       // Tell the buyer the discount has applied the moment it does. The server prices the
       // order regardless of what this says — this only reflects the rule, it never sets it.
       (function(){
@@ -507,8 +582,35 @@ export function renderGiftCardSuccess(result) {
         ${expiryRow(card)}
         ${pur.gift ? `<div class="row"><span class="k">Sent to</span><span class="v">${pur.recipient?.name}</span></div>` : ''}
       </div>
-      <div class="note">A branded voucher has been emailed to ${to}. It can be redeemed against any service at any Niobe branch.${pdf ? `<br><a class="btnAlt" href="${pdf}" style="margin-top:12px" target="_blank" rel="noopener">Download the voucher (PDF)</a>` : ''}</div>
+      <div class="note">${deliveryNote(result, to)} It can be redeemed against any service at any Niobe branch.${pdf ? `<br><a class="btnAlt" href="${pdf}" style="margin-top:12px" target="_blank" rel="noopener">Download the voucher (PDF)</a>` : ''}${card ? `<br><a class="btnAlt" href="/gift-card/voucher?code=${encodeURIComponent(card.code)}" style="margin-top:12px" target="_blank" rel="noopener">View &amp; print the voucher</a>` : ''}</div>
     </div>`);
+}
+
+// What we tell the buyer about delivery — and it has to be what actually happened.
+//
+// On the GiftUp route we had no signal: GiftUp sends its own email and never tells us whether
+// it arrived, so "a voucher has been emailed to…" was the only sentence available. Issuing the
+// cards ourselves means we DO know, and a page that says "emailed to Ama" when the send failed
+// is worse than one that says nothing: the buyer walks away satisfied and the recipient gets
+// nothing. So the claim is only made when a send actually succeeded, and when it did not, the
+// buyer is told plainly and given the code — which is the card, and which they now have.
+function deliveryNote(result, to) {
+  const d = result.delivery;
+  if (!d || !d.attempted) return `A branded voucher has been emailed to ${to}.`;
+  if (d.scheduled && !d.sent && !d.failed) {
+    return 'Your voucher is ready and will be sent on the delivery date you chose.';
+  }
+  // Where it ACTUALLY went, not where the order implies it should have. For a "print it
+  // myself" gift those are different addresses — the order names the recipient, the send goes
+  // to the buyer — and deriving it from the order names an empty one.
+  const addr = d.results?.find((r) => r.address)?.address || to;
+  if (d.ok) {
+    return `A branded voucher has been emailed to ${addr}.`
+      + (d.scheduled ? ' Any cards you dated for later will be sent on the day you chose.' : '');
+  }
+  return 'Your gift card is paid for and active — the code above is the card. We could not send'
+    + ` the voucher email${addr ? ` to ${addr}` : ''} just now, so please keep this code safe; we`
+    + ' will retry, and you can print the voucher from the link below in the meantime.';
 }
 
 export function renderSuccess(result) {

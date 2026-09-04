@@ -133,6 +133,21 @@ export const CONFIG = {
   fxFixedUplift: Number(process.env.FX_FIXED_UPLIFT ?? 0),
   stripeUkSecret: process.env.STRIPE_UK_SECRET || '',
 
+  // WHO ISSUES A NEW GIFT CARD — 'giftup' or 'niobe'. Niobe, 4 Sep 2026: "we are looking at
+  // our own gift card setup, independent from gift up and managed solely by us".
+  //
+  // 'niobe' issues from our own ledger (cards.js): we mint the code, hold the balance, render
+  // the voucher and email it. 'giftup' posts an order to GiftUp and lets them do all four.
+  //
+  // Defaults to 'giftup' — the setting that changes NOTHING — because this switch decides
+  // where real money's worth of bearer instruments is recorded, and that is not a thing to
+  // change as a side effect of a deploy. It is flipped deliberately, once, when Niobe says so.
+  //
+  // It governs ISSUING ONLY. Reading a card is always all three ledgers (ours, GiftUp's,
+  // SimpleSpa's) whatever this says, so flipping it never invalidates a card already in a
+  // customer's hands — every GiftUp card sold to date keeps working until it lapses.
+  giftcardIssuer: (process.env.GIFTCARD_ISSUER || 'giftup').toLowerCase() === 'niobe' ? 'niobe' : 'giftup',
+
   // GiftUp gift-card rail — redeem a GiftUp gift card against a booking instead of a cash deposit.
   // Key is a Bearer JWT from the GiftUp dashboard; kept server-side only (never in git).
   giftupKey: process.env.GIFTUP_API_KEY || '',

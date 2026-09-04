@@ -7,9 +7,11 @@ import { getConsolidatedStock, stockCsv, stockCsvFilename } from './stock.js';
 import { getIntlPayments, intlPaymentsCsv, intlPaymentsCsvFilename } from './intlpay.js';
 import { getUnifiedAvailability, listServiceNames } from './availability.js';
 import { getBooking, bookingDeposit, startDeposit, finalizeDeposit, listBookings, getPayment, lookupBookings, claimAlreadyPaid } from './bookings.js';
-import { startPurchase, finalizePurchase, getPurchase } from './giftcards.js';
+import { startPurchase, finalizePurchase, getPurchase, giftCatalog } from './giftcards.js';
 import { sweepAll, sweepBranchReport, listHolds, startSweepLoop, secureAndConfirm } from './holds.js';
-import { getCatalog } from './giftup.js';
+// The gift-card page asks giftcards.js for the catalogue, not GiftUp directly: which
+// issuer is live decides where the package list comes from, and the page must never
+// render one catalogue while the checkout prices against the other.
 import { verifyWebhookSignature, parseWebhookEvent, displayName as gatewayName } from './gateway.js';
 import { noteReturn as noteExpressPayReturn } from './expresspay.js';
 import { renderPayPage, renderCheckout, renderSuccess, renderPhoneEntry, renderChooser, renderNoMatch, renderCreditClaim, renderGiftCardPage, renderGiftCheckout, renderGiftCardSuccess, renderGiftCardPending,
@@ -18,11 +20,38 @@ import { renderPayPage, renderCheckout, renderSuccess, renderPhoneEntry, renderC
   renderBalancePage, renderBalanceResult, renderBalanceExpired, renderBalanceProblem } from './views.js';
 import { checkGiftCard, redeemForBooking, claimSimpleSpaCard } from './redeem.js';
 import { publicBalanceCheck, normaliseCode } from './balance.js';
-import { clientIp } from './ratelimit.js';
+import { clientIp, createLimiter } from './ratelimit.js';
+import { voucherHtml } from './voucher.js';
+import { getCard } from './cards.js';
+
+// The printable voucher is reachable by anyone with a code. Generous for the person who
+// prints, reloads, and prints again; useless as a way to probe codes in bulk.
+const voucherLimiter = createLimiter([
+  { ms: 60_000, max: Number(process.env.VOUCHER_RATE_PER_MIN || 20), label: 'minute' },
+  { ms: 3_600_000, max: Number(process.env.VOUCHER_RATE_PER_HOUR || 120), label: 'hour' },
+]);
+
+// Deliberately says nothing about WHY. "That card exists but is not paid for" is a sentence
+// that helps only somebody testing codes they should not have.
+const renderVoucherMissing = () => `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Voucher not found</title>
+<style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+font-family:'Segoe UI',system-ui,sans-serif;background:#f6f1ec;color:#2b2320}
+.c{background:#fffdfb;border:1px solid #e9ddd2;border-radius:16px;padding:32px 38px;max-width:400px;text-align:center}
+p{color:#8b7d73;font-size:14px;line-height:1.6}a{color:#8a6a3c}</style></head>
+<body><div class="c"><h2 style="margin:0 0 8px;font-size:18px">We could not find that voucher</h2>
+<p>Please check the code and try again. If you are sure it is right,
+<a href="/balance">check the balance</a> or contact any Niobe branch.</p></div></body></html>`;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(__dirname, '..', 'public');
-const MIME = { '.html':'text/html', '.js':'text/javascript', '.css':'text/css', '.json':'application/json', '.png':'image/png', '.svg':'image/svg+xml' };
+// An extension missing from this map is served as application/octet-stream, which a browser
+// downloads instead of rendering — so an image that is present, correct and readable on disk
+// still shows as a broken picture on the page. The gift-card designs are .jpg, which is how
+// this was found.
+const MIME = { '.html':'text/html', '.js':'text/javascript', '.css':'text/css', '.json':'application/json',
+  '.png':'image/png', '.svg':'image/svg+xml', '.jpg':'image/jpeg', '.jpeg':'image/jpeg',
+  '.webp':'image/webp', '.gif':'image/gif', '.ico':'image/x-icon', '.pdf':'application/pdf' };
 
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
 const html = (res, code, body) => { res.writeHead(code, { 'Content-Type': 'text/html' }); res.end(body); };
@@ -316,7 +345,30 @@ const server = createServer(async (req, res) => {
 
     // --- Online gift-card purchase ---
     if (req.method === 'GET' && p === '/gift-card') {
-      return html(res, 200, renderGiftCardPage(await getCatalog()));
+      return html(res, 200, renderGiftCardPage(await giftCatalog()));
+    }
+    // The printable voucher — "for those who want to print themselves". The GiftUp route has
+    // this as a PDF link from GiftUp; on our own cards we render it.
+    //
+    // The code in the URL is not a hole: the code IS the card, so anyone who has it can
+    // already spend it, and this page shows them nothing they do not hold. It is rate limited
+    // all the same, because it is reachable by anyone and would otherwise be a way to test
+    // codes without going near the balance page's limiter.
+    if (req.method === 'GET' && p === '/gift-card/voucher') {
+      const rl = voucherLimiter.check(clientIp(req) || 'unknown');
+      if (!rl.ok) {
+        res.writeHead(429, { 'Content-Type': 'text/plain', 'Retry-After': String(rl.retryAfterSec || 60) });
+        return res.end('Too many requests — please wait a moment.');
+      }
+      const card = getCard(normaliseCode(url.searchParams.get('code')));
+      // Only a PAID card has a voucher. A reserved one has not been paid for and its code is
+      // not supposed to be in anyone's hands; rendering it here would undo the whole point of
+      // withholding it. Both cases answer 404 — never confirm that a code exists but is unpaid.
+      if (!card || card.status !== 'paid') return html(res, 404, renderVoucherMissing());
+      return html(res, 200, voucherHtml({
+        code: card.code, value: card.faceValue, expiresAt: card.expiresAt, design: card.design,
+        recipientName: card.recipientName, buyerName: card.buyerName, message: card.message,
+      }));
     }
     if (req.method === 'POST' && p === '/gift-card/start') {
       const body = parseBody(await readBody(req), req.headers['content-type']);
@@ -325,7 +377,7 @@ const server = createServer(async (req, res) => {
         return redirect(res, authorization_url);
       } catch (e) {
         // Show the buyer a friendly message on the form rather than a raw error.
-        return html(res, 400, renderGiftCardPage(await getCatalog(), e.message || 'Something went wrong — please check your details and try again.'));
+        return html(res, 400, renderGiftCardPage(await giftCatalog(), e.message || 'Something went wrong — please check your details and try again.'));
       }
     }
     if (req.method === 'GET' && p === '/gift-card/callback') {
