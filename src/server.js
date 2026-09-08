@@ -6,7 +6,7 @@ import { CONFIG, branchById } from './config.js';
 import { getConsolidatedStock, stockCsv, stockCsvFilename } from './stock.js';
 import { getIntlPayments, intlPaymentsCsv, intlPaymentsCsvFilename } from './intlpay.js';
 import { getUnifiedAvailability, listServiceNames } from './availability.js';
-import { getBooking, bookingDeposit, startDeposit, finalizeDeposit, listBookings, getPayment, lookupBookings, claimAlreadyPaid } from './bookings.js';
+import { getBooking, bookingDeposit, startDeposit, finalizeDeposit, listBookings, getPayment, lookupBookings, lookupEverywhere, claimAlreadyPaid } from './bookings.js';
 import { startPurchase, finalizePurchase, getPurchase, giftCatalog } from './giftcards.js';
 import { sweepAll, sweepBranchReport, listHolds, startSweepLoop, secureAndConfirm } from './holds.js';
 // The gift-card page asks giftcards.js for the catalogue, not GiftUp directly: which
@@ -17,7 +17,7 @@ import { noteReturn as noteExpressPayReturn } from './expresspay.js';
 import { renderPayPage, renderCheckout, renderSuccess, renderPhoneEntry, renderChooser, renderNoMatch, renderCreditClaim, renderGiftCardPage, renderGiftCheckout, renderGiftCardSuccess, renderGiftCardPending,
   renderGiftRedeemPage, renderGiftRedeemCheck, renderGiftRedeemShort, renderGiftRedeemDone, renderGiftRedeemProblem,
   renderGiftRedeemManual, renderGiftRedeemClaimed,
-  renderBalancePage, renderBalanceResult, renderBalanceExpired, renderBalanceProblem } from './views.js';
+  renderBalancePage, renderBalanceResult, renderBalanceExpired, renderBalanceProblem, renderDeskSearch } from './views.js';
 import { checkGiftCard, redeemForBooking, claimSimpleSpaCard } from './redeem.js';
 import { publicBalanceCheck, normaliseCode } from './balance.js';
 import { clientIp, createLimiter } from './ratelimit.js';
@@ -205,6 +205,25 @@ const server = createServer(async (req, res) => {
     // /desk/<branchId>/sweep  → single-branch read-only report (JSON)
     // Each branch's URL is protected by its own login at the nginx layer; here we
     // enforce the branch scope and the office-hours window (8am–7pm Ghana time).
+    // --- All-branch booking search (front desk) ---
+    // MUST come before the /desk/<branchId> matcher below, which would otherwise read
+    // "search" as a branch id and answer 404 Unknown branch.
+    //
+    // Deliberately NOT behind the office-hours gate the per-branch views use. That gate exists
+    // because those pages drive sweeps that can release a booking; this one only reads. And the
+    // hotel desks at African Regent and Alisa run to 22:00, well past the 19:00 close — gating
+    // this would take the search away from the two branches whose guests are most likely to
+    // have booked somewhere else in the group.
+    if (req.method === 'GET' && p === '/desk/search') {
+      const q = (url.searchParams.get('q') || '').trim();
+      if (!q) return html(res, 200, renderDeskSearch({ query: '' }));
+      // A query with 7+ digits is a phone number however it was typed — with spaces, with
+      // +233, with a leading zero. Anything else is treated as a name.
+      const digits = q.replace(/\D/g, '');
+      const result = await lookupEverywhere(digits.length >= 7 ? { phone: digits } : { name: q });
+      return html(res, 200, renderDeskSearch({ query: q, result }));
+    }
+
     const deskMatch = p.match(/^\/desk\/([a-z0-9_]+)(\/sweep)?$/);
     if (req.method === 'GET' && deskMatch) {
       const branchId = deskMatch[1];

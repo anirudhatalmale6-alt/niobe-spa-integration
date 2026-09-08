@@ -215,6 +215,84 @@ export function renderChooser(list, branchName) {
     <div class="card"><h2 style="margin-top:2px">Which appointment?</h2>${rows}</div>`);
 }
 
+// The all-branch booking search, for the front desk.
+//
+// It replaces "pick a branch, search, no luck, pick another branch, search again" with one
+// box. That loop is not just slow — it ends in a wrong answer, because after four misses the
+// natural conclusion is "you have no booking", when the truth may be that the fifth branch was
+// never checked. So this page is built around showing what it actually searched.
+// "Mon 7 Sep, 15:00" rather than "2026-09-07 15:00:00". The desk scans this list while a
+// guest waits; the year is never in doubt and the seconds never matter, but the DAY does —
+// "is that today or Thursday?" is the question actually being asked.
+function deskWhen(dt) {
+  const d = new Date(String(dt).replace(' ', 'T'));
+  if (Number.isNaN(d.getTime())) return String(dt || '');
+  const day = d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+  const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
+  const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+  const dd = new Date(d); dd.setUTCHours(0, 0, 0, 0);
+  const days = Math.round((dd - today) / 86400000);
+  const rel = days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : null;
+  return rel ? `${rel}, ${time}` : `${day}, ${time}`;
+}
+
+export function renderDeskSearch({ query = '', result = null } = {}) {
+  const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+  // Never a bare "nothing found" when a branch failed to answer. The desk is talking to a
+  // guest, and "no booking" and "we couldn't reach one of the branches" are opposite things
+  // to say to someone standing at the counter.
+  const problems = result?.unreachable?.length ? `
+    <div class="note" style="border:1.5px solid #d8a45f;background:#fdf4e6;border-radius:12px;padding:12px 14px;margin:0 0 14px">
+      <strong>${result.unreachable.length} branch(es) could not be checked.</strong> This is not the
+      same as "no booking" — the guest may well have one at ${result.unreachable.length === 1 ? 'it' : 'one of them'}.
+      <div style="margin-top:6px;font-size:13px;color:var(--muted)">
+        ${result.unreachable.map((u) => `${esc(u.branchName)} — ${esc(u.error)}`).join('<br>')}
+      </div>
+    </div>` : '';
+
+  const rows = (result?.results || []).map((b) => `
+    <a href="/pay?booking=${encodeURIComponent(b.id)}" style="text-decoration:none;color:inherit">
+      <div class="opt" style="cursor:pointer;align-items:flex-start">
+        <span>
+          <span class="lab">${esc(b.customer?.name || 'Guest')}</span>
+          <span class="badge" style="margin-left:8px">${esc(b.branchName)}</span><br>
+          <span class="sub">${esc(b.service)} · ${esc(deskWhen(b.datetime))}${b.therapist ? ` · with ${esc(b.therapist)}` : ''}</span><br>
+          <span class="sub">${esc(b.customer?.phone || 'no number on file')}</span>
+        </span>
+        <span class="amt">${GHS(b.price)}</span>
+      </div>
+    </a>`).join('');
+
+  const found = result ? (result.results.length
+    ? `<p style="color:var(--muted);font-size:13px;margin:0 0 10px">${result.results.length} booking(s)
+       across ${new Set(result.results.map((r) => r.branchName)).size} branch(es).
+       Searched: ${result.searched.map(esc).join(', ') || 'none'}.</p>${rows}`
+    : `<div class="center" style="padding:18px 0">
+         <h2 style="font-size:17px;margin:0 0 6px">Nothing found</h2>
+         <p style="color:var(--muted);font-size:14px;margin:0">
+           No booking matching that in the next 90 days at:
+           ${result.searched.map(esc).join(', ') || 'no branch'}.
+         </p>
+       </div>`) : '';
+
+  return shell('Find a booking — all branches', `
+    <div class="brand"><div class="t">Front desk · all branches</div></div>
+    <div class="card">
+      <h2 style="margin-top:2px">Find a booking</h2>
+      <p style="color:var(--muted);font-size:14px;margin:0 0 12px">
+        Searches all five branches at once. Mobile number or name.</p>
+      <form method="GET" action="/desk/search">
+        <input name="q" value="${esc(query)}" autofocus placeholder="024 123 4567, or Ama Mensah"
+          style="width:100%;padding:13px 14px;border:1.5px solid var(--line);border-radius:12px;font-size:16px">
+        <button class="btn" type="submit" style="margin-top:10px">Search</button>
+      </form>
+      ${problems}
+      ${found}
+    </div>`);
+}
+
 export function renderNoMatch(branchId, branchName) {
   return shell('No appointment found', `
     <div class="brand"><div class="n">Niobe Beauty</div><div class="t">${branchName || ''}</div></div>

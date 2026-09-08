@@ -126,6 +126,52 @@ if (r.unmatchedStaff.length) {
     out.push(line(['  unrecognised', u.name, u.branches.join(' / '), `${u.treatments} treatment(s)`, u.value.toFixed(2)]));
   }
 }
+// The check that catches this report's own central failure. Two spellings of one therapist
+// split her across two rows, each of which looks entirely correct — so it cannot be found by
+// reading the payroll, only by comparing the names to each other. It is placed here, in the
+// file, because a warning that lives only in a chat message is a warning nobody sees at the
+// moment of paying.
+if (r.possibleSamePerson?.length) {
+  // Grouped, not listed as pairs. One therapist under four spellings produces six pairs, and
+  // six lines about the same person reads as six problems — whoever has to act on this needs
+  // to see "here is one person, here is everything of hers", once.
+  const parent = new Map();
+  const find = (x) => { while (parent.get(x) !== x) x = parent.get(x); return x; };
+  const union = (x, y) => { parent.set(find(x), find(y)); };
+  const info = new Map();
+  for (const p of r.possibleSamePerson) {
+    for (const side of [p.a, p.b]) {
+      if (!parent.has(side.name)) parent.set(side.name, side.name);
+      info.set(side.name, side);
+    }
+    union(p.a.name, p.b.name);
+  }
+  const clusters = new Map();
+  for (const n of parent.keys()) {
+    const root = find(n);
+    if (!clusters.has(root)) clusters.set(root, []);
+    clusters.get(root).push(info.get(n));
+  }
+  const groups = [...clusters.values()]
+    .map((g) => g.sort((a, b) => b.value - a.value))
+    .sort((a, b) => b.reduce((n, x) => n + x.value, 0) - a.reduce((n, x) => n + x.value, 0));
+
+  out.push([]);
+  out.push(line(['POSSIBLY THE SAME PERSON — confirm before paying']));
+  out.push(line(['', 'Each group below is one set of names that may all be a single therapist:',
+    'either spelled differently at different branches, or with and without a surname.']));
+  out.push(line(['', 'If a group IS one person she is on this report several times, each for part',
+    'of her work, and will be paid several part-payments instead of one correct one.']));
+  for (const g of groups) {
+    const tx = g.reduce((n, x) => n + x.treatments, 0);
+    const val = g.reduce((n, x) => n + x.value, 0);
+    out.push(line(['  IF ONE PERSON', `${g.length} names`, `${tx} treatment(s)`, `GHS ${val.toFixed(2)} of work`]));
+    for (const x of g) {
+      out.push(line(['', `  ${x.name}`, `${x.treatments} treatment(s)`, x.value.toFixed(2),
+        x.where === 'unmatched' ? 'NOT on the staff list — currently unpaid' : 'on the staff list — being paid separately']));
+    }
+  }
+}
 if (r.branchErrors.length) {
   out.push(line(['BRANCH PROBLEMS — figures may be incomplete']));
   for (const b of r.branchErrors) out.push(line(['  ', b.branch, b.error]));
@@ -146,4 +192,5 @@ if (process.argv.includes('--stdout')) {
   console.log(`${r.totals.people} therapists, ${r.totals.treatments} treatments, GHS ${r.totals.serviceValue.toLocaleString()} of work, GHS ${r.totals.commission.toLocaleString()} commission.`);
   if (r.totals.unratedValue) console.log(`WARNING: GHS ${r.totals.unratedValue.toLocaleString()} of work has no commission rate — not ready to pay from.`);
   if (r.unmatchedStaff.length) console.log(`WARNING: ${r.unmatchedStaff.length} therapist(s) not on the confirmed staff list — see the file.`);
+  if (r.possibleSamePerson?.length) console.log(`WARNING: names that may be the same therapist twice — see "POSSIBLY THE SAME PERSON" in the file.`);
 }

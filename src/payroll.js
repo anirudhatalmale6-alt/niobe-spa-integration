@@ -321,7 +321,86 @@ export async function runPayroll({ start, end, staffMap = loadStaffMap(), branch
     unpricedTreatments: unpriced,
     branchErrors,
     staffMapLoaded: staffMap.loaded,
+    // Names that look like one person spelled two ways. See nearDuplicateNames.
+    possibleSamePerson: nearDuplicateNames([
+      ...rows.map((r) => ({ name: r.name, where: 'payroll', treatments: r.treatments, value: r.serviceValue })),
+      ...[...unmatched.values()].map((u) => ({ name: u.name, where: 'unmatched', treatments: u.treatments, value: round2(u.value) })),
+    ], staffMap),
   };
+}
+
+// Names that are one or two characters apart, i.e. probably one person entered twice.
+//
+// This check exists because the module's central promise failed quietly. Every branch issues
+// its own staff id, so the NAME is the only join key, and a therapist spelled differently at
+// one branch splits into two people — which is the exact thing consolidating across branches
+// was supposed to prevent. The staff map fixes that with aliases, but only for the spellings
+// somebody noticed when the map was written. A new starter, or a branch that types a name a
+// new way, reopens the hole silently: both rows look completely reasonable, the totals still
+// add up, and the only symptom is one person receiving two payments for half each.
+//
+// So the report now looks for it every month instead of relying on someone spotting it. It
+// never merges anything — a merge decides who gets paid, and that is Niobe's call — it just
+// refuses to let the possibility go unmentioned.
+//
+// Levenshtein rather than token overlap or a phonetic key: the real cases here are a single
+// letter substituted or inserted ("Nyanpong"/"Nyampong", "Princella"/"Priscella"), which is
+// precisely what edit distance measures and what soundex-style matching blurs together with
+// genuinely different names.
+export function nearDuplicateNames(entries, staffMap) {
+  const lev = (a, b) => {
+    a = a.toLowerCase(); b = b.toLowerCase();
+    const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+    for (let j = 0; j <= b.length; j++) d[0][j] = j;
+    for (let i = 1; i <= a.length; i++) {
+      for (let j = 1; j <= b.length; j++) {
+        d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      }
+    }
+    return d[a.length][b.length];
+  };
+
+  // Already-known aliases are not a finding. Reporting a pair the map deliberately joins
+  // would train whoever reads this to skip the section, and then the real one goes past too.
+  const known = new Set();
+  for (const p of (staffMap?.byName ? [...staffMap.byName.values()] : [])) {
+    if (p?.name) known.add(normName(p.name));
+  }
+
+  // The OTHER way one therapist becomes two rows, and the one edit distance cannot see:
+  // a record carrying only a first name alongside the same person's full name. "Priscella" is
+  // six edits from "Priscella Zekpe" — as far apart as two strangers by that measure — but
+  // they are the same therapist at the same branch, because appointments keep the staff name
+  // as it stood when they were booked and somebody later added the surname.
+  //
+  // So: one name's words being a subset of the other's is its own signal. Requiring the FIRST
+  // word to match keeps it honest — otherwise every "Mensah" pairs with every other.
+  const words = (s) => normName(s).split(' ').filter(Boolean);
+  const subsetOf = (a, b) => {
+    const A = words(a), B = words(b);
+    if (!A.length || !B.length || A.length >= B.length) return false;
+    if (A[0] !== B[0]) return false;
+    return A.every((w) => B.includes(w));
+  };
+
+  const out = [];
+  for (let i = 0; i < entries.length; i++) {
+    for (let j = i + 1; j < entries.length; j++) {
+      const a = entries[i], b = entries[j];
+      // Same canonical person under two raw spellings is the map working, not a problem.
+      if (known.has(normName(a.name)) && normName(a.name) === normName(b.name)) continue;
+      const d = lev(a.name, b.name);
+      // 2 rather than 3: at 3 a five-letter first name can turn into an unrelated one, and a
+      // check that cries wolf on real colleagues gets ignored in the month it matters.
+      if (d > 0 && d <= 2) { out.push({ reason: 'spelling', distance: d, a, b }); continue; }
+      if (subsetOf(a.name, b.name) || subsetOf(b.name, a.name)) {
+        out.push({ reason: 'partial name', distance: d, a, b });
+      }
+    }
+  }
+  // Biggest money first. Whoever reads this has a payroll to get out, and the pair worth
+  // GHS 25,000 should not be below the pair worth GHS 300.
+  return out.sort((x, y) => (y.a.value + y.b.value) - (x.a.value + x.b.value));
 }
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;

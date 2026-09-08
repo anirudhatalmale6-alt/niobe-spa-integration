@@ -264,6 +264,60 @@ export async function lookupBookings({ branchId, phone }) {
   return out;
 }
 
+// Find a booking across ALL FIVE BRANCHES at once, by phone or by name.
+//
+// Niobe, 8 Sep 2026: "the current search method involves searching by branch which can be
+// frustrating". It is the same shape of problem as the payroll — SimpleSpa is five separate
+// systems that happen to share a company — and the front desk pays for it every time a guest
+// rings the wrong branch, or booked at Cantonments and turned up at East Legon. Staff either
+// guess which branch, or check all five by hand.
+//
+// The rule that matters here is the same one the balance page is built around: a branch that
+// did NOT ANSWER is not a branch with no bookings. If one of the five times out and we quietly
+// return four branches' worth of results, the desk reads "no booking found" and tells a guest
+// who is standing in front of them that they have no appointment. So failures are collected
+// and returned alongside the hits, and the page has to show them.
+export async function lookupEverywhere({ phone, name, branches = BRANCHES } = {}) {
+  const ph = last9(phone);
+  const nm = String(name || '').trim().toLowerCase();
+  if (!ph && nm.length < 2) return { results: [], unreachable: [], searched: [] };
+
+  const settled = await Promise.all(branches.map(async (branch) => {
+    if (!branch.key) return { branch, error: 'no API key configured' };
+    try {
+      const appts = await fetchUpcomingAppointments(branch);
+      const hits = [];
+      for (const a of appts) {
+        const aPhone = last9(a.client?.mobile);
+        const aName = `${a.client?.first_name || ''} ${a.client?.last_name || ''}`.trim().toLowerCase();
+        // Phone is exact-ish (last 9 digits); name is a contains match, because staff type
+        // "ama" for "Ama Serwaa Mensah" and a prefix-only match would miss a surname search.
+        const match = ph ? aPhone === ph : aName.includes(nm);
+        if (!match) continue;
+        hits.push(await toBooking(branch, a));
+      }
+      return { branch, hits };
+    } catch (e) {
+      return { branch, error: e.message };
+    }
+  }));
+
+  const results = [];
+  const unreachable = [];
+  for (const s of settled) {
+    if (s.error) { unreachable.push({ branchId: s.branch.id, branchName: s.branch.name, error: s.error }); continue; }
+    results.push(...s.hits);
+  }
+  // Soonest first, and across branches — the whole point is that the desk stops thinking in
+  // branches. A guest with appointments at two sites wants them in the order they happen.
+  results.sort((a, b) => String(a.datetime).localeCompare(String(b.datetime)));
+  return {
+    results,
+    unreachable,
+    searched: settled.filter((s) => !s.error).map((s) => s.branch.name),
+  };
+}
+
 // Build the deposit choices (50% or full) for a booking.
 export async function bookingDeposit(id) {
   const b = await getBooking(id);
