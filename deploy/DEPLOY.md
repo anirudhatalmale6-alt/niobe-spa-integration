@@ -157,6 +157,52 @@ htpasswd with `openssl passwd -apr1 '<pass>'` → `echo 'user:HASH' > /etc/nginx
 The dashboards drive **read-only** sweeps, so opening a view never cancels anything — the
 background loop is the sole actor.
 
+## Monthly payroll (commission report)
+
+```bash
+node scripts/payroll-report.mjs 2026-08     # writes data/payroll-2026-08.csv
+```
+
+Consolidates every therapist's paid treatments across all five branches into one line
+each. Read-only against SimpleSpa.
+
+**It depends on `data/staff-map.json`, which is NOT in this repo and never should be.**
+It holds 36 employees' names and commission rates; the repo is public. It is also the
+single thing that makes the report correct, so it must be backed up somewhere Niobe
+controls — losing it does not break the script, it makes the script quietly pay the
+wrong people.
+
+Why it exists: each branch issues its own `staff_id`, so a therapist working two
+branches has two ids and the NAME is the only key that joins her work. The names are
+not written the same way everywhere, and an appointment stores the therapist's name
+**as it stood when the booking was made** — so renaming someone in SimpleSpa never
+fixes past months. Aliases in this file do.
+
+```json
+{
+  "people": [
+    { "name": "Priscilla Enyonam Zekpe",
+      "aliases": ["priscella zekpe", "princella zekpe", "priscella", "princella"],
+      "commissionPct": 10 },
+    { "name": "Amelia Nkansah", "former": true, "leftOn": "2026-07-15" }
+  ],
+  "exclude": ["niobe el service", "niobe staff 1"]
+}
+```
+
+- `aliases` — every spelling that appears in the appointment history, lower-case. Take
+  them from the data, not from memory: scan several months, because a variant can exist
+  in June and not in August.
+- `exclude` — house and front-desk logins that are not people.
+- `former` / `leftOn` — a leaver is still computed, but into her own section, never the
+  pay run. `leftOn` also flags work booked under her login after she left.
+- An alias must never duplicate another person's name or alias, or the later entry
+  silently wins the lookup and one person is paid for another's work.
+
+The report refuses to be quietly wrong: it lists therapists it could not match, names
+that may be one person twice, treatments with no rate, and any branch that failed to
+answer. Read the `CHECKS` block at the bottom of the CSV before paying from it.
+
 ## Updating later
 ```bash
 cd /opt/niobe-integration && git pull --ff-only && systemctl restart niobe-pay
