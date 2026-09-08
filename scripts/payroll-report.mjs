@@ -131,6 +131,18 @@ if (r.unmatchedStaff.length) {
 // reading the payroll, only by comparing the names to each other. It is placed here, in the
 // file, because a warning that lives only in a chat message is a warning nobody sees at the
 // moment of paying.
+// Merges SimpleSpa itself vouched for. Shown because a merge changes who appears on a
+// payroll, and a change nobody can see is a change nobody can check — even a correct one.
+if (r.mergedByStaffId?.length) {
+  out.push([]);
+  out.push(line(['JOINED AUTOMATICALLY — same SimpleSpa staff id, so definitely one person']));
+  out.push(line(['', 'An appointment stores the therapist name as it was WHEN IT WAS BOOKED, so adding',
+    'a surname later leaves the old bookings under the old spelling. The staff id does not change,',
+    'and it is what these were joined on. No guesswork involved.']));
+  for (const m of r.mergedByStaffId) {
+    out.push(line(['  joined', m.branch, m.name, `was also recorded as: ${m.variants.filter((v) => v !== m.name).join(' / ')}`]));
+  }
+}
 if (r.possibleSamePerson?.length) {
   // Grouped, not listed as pairs. One therapist under four spellings produces six pairs, and
   // six lines about the same person reads as six problems — whoever has to act on this needs

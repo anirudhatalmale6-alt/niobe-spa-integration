@@ -174,6 +174,9 @@ export async function runPayroll({ start, end, staffMap = loadStaffMap(), branch
   const people = new Map();     // canonical person name -> row
   const formerPeople = new Map(); // same, for staff who have left — reported, never paid
   const unmatched = new Map();  // normalised name -> { name, branches:Set, treatments, value }
+  // Names merged because SimpleSpa's own staff_id said they were one person. Reported, not
+  // silent: a merge changes who appears on a payroll and must be visible on the payroll.
+  const mergedByStaffId = [];
   const skipped = {};           // status label -> count
   const branchErrors = [];
   const missingRateFor = new Map(); // "person / category" -> count
@@ -196,6 +199,28 @@ export async function runPayroll({ start, end, staffMap = loadStaffMap(), branch
       });
     }
 
+    // WITHIN one branch, the staff_id is authoritative and the name is not.
+    //
+    // Verified on live August data: at Alisa, id 682c18c3 carries BOTH "Priscella " (47
+    // appointments, note the trailing space) and "Priscella Zekpe" (89). At Community 18, id
+    // 9a231c37 carries both "Princella " and "Princella Zekpe". One person, one id, two
+    // strings — because an appointment stores the therapist's name AS IT STOOD WHEN IT WAS
+    // BOOKED, and somebody later added the surname to the staff record.
+    //
+    // That has a consequence worth stating plainly: renaming a therapist in SimpleSpa does
+    // NOT correct her past appointments. History keeps the old spelling for ever, so this
+    // split cannot be fixed at source and has to be handled here.
+    //
+    // Joining on the id needs no guess and no confirmation — SimpleSpa itself is saying these
+    // are the same employee. Only the CROSS-branch join stays a question for Niobe, because
+    // ids are per-branch and genuinely carry no information between them.
+    const canonical = canonicalNamesById(batch.appointments);
+    for (const [, c] of canonical) {
+      if (c.variants.length > 1) {
+        mergedByStaffId.push({ branch: branch.name, name: c.name, variants: c.variants });
+      }
+    }
+
     for (const appt of batch.appointments) {
       const status = String(appt.status);
       if (!EARNING_STATUS.has(status)) {
@@ -203,7 +228,8 @@ export async function runPayroll({ start, end, staffMap = loadStaffMap(), branch
         skipped[label] = (skipped[label] || 0) + 1;
         continue;
       }
-      const staffName = appt.staff?.staff_name || '';
+      const sid = appt.staff?.staff_id || '';
+      const staffName = (sid && canonical.get(sid)?.name) || appt.staff?.staff_name || '';
       const key = normName(staffName);
       if (!key || staffMap.exclude.has(key)) continue;
 
@@ -321,6 +347,7 @@ export async function runPayroll({ start, end, staffMap = loadStaffMap(), branch
     unpricedTreatments: unpriced,
     branchErrors,
     staffMapLoaded: staffMap.loaded,
+    mergedByStaffId,
     // Names that look like one person spelled two ways. See nearDuplicateNames.
     possibleSamePerson: nearDuplicateNames([
       ...rows.map((r) => ({ name: r.name, where: 'payroll', treatments: r.treatments, value: r.serviceValue })),
@@ -347,6 +374,34 @@ export async function runPayroll({ start, end, staffMap = loadStaffMap(), branch
 // letter substituted or inserted ("Nyanpong"/"Nyampong", "Princella"/"Priscella"), which is
 // precisely what edit distance measures and what soundex-style matching blurs together with
 // genuinely different names.
+// One canonical name per staff_id, for a single branch's appointments.
+//
+// The fullest spelling wins: most words first, then longest. "Priscella Zekpe" beats
+// "Priscella " because a surname is information and its absence is just an older record —
+// never the other way round, or the merge would throw away the only distinguishing part of
+// the name and make two real colleagues look like one person.
+export function canonicalNamesById(appointments) {
+  const byId = new Map();
+  for (const a of appointments || []) {
+    const id = a.staff?.staff_id;
+    const raw = String(a.staff?.staff_name || '').replace(/\s+/g, ' ').trim();
+    if (!id || !raw) continue;
+    if (!byId.has(id)) byId.set(id, new Map());
+    const seen = byId.get(id);
+    seen.set(raw, (seen.get(raw) || 0) + 1);
+  }
+  const out = new Map();
+  for (const [id, seen] of byId) {
+    const variants = [...seen.keys()];
+    const best = variants.slice().sort((x, y) => {
+      const wx = x.split(' ').length, wy = y.split(' ').length;
+      return wy - wx || y.length - x.length;
+    })[0];
+    out.set(id, { name: best, variants: variants.sort(), counts: seen });
+  }
+  return out;
+}
+
 export function nearDuplicateNames(entries, staffMap) {
   const lev = (a, b) => {
     a = a.toLowerCase(); b = b.toLowerCase();
