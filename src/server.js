@@ -9,6 +9,7 @@ import { getUnifiedAvailability, listServiceNames } from './availability.js';
 import { getBooking, bookingDeposit, startDeposit, finalizeDeposit, listBookings, getPayment, lookupBookings, lookupEverywhere, claimAlreadyPaid } from './bookings.js';
 import { startPurchase, finalizePurchase, getPurchase, giftCatalog } from './giftcards.js';
 import { sweepAll, sweepBranchReport, listHolds, startSweepLoop, secureAndConfirm } from './holds.js';
+import { startCardSweepLoop, runCardSweep } from './cardsweep.js';
 // The gift-card page asks giftcards.js for the catalogue, not GiftUp directly: which
 // issuer is live decides where the package list comes from, and the page must never
 // render one catalogue while the checkout prices against the other.
@@ -214,6 +215,30 @@ const server = createServer(async (req, res) => {
     // hotel desks at African Regent and Alisa run to 22:00, well past the 19:00 close — gating
     // this would take the search away from the two branches whose guests are most likely to
     // have booked somewhere else in the group.
+    // What the gift-card sweep would do right now, without doing any of it. This is how the
+    // report-only period is actually observed — otherwise "watch it for a few days" means
+    // reading a log nobody has access to.
+    // UNDER /desk/, NOT /api/. nginx protects /holds.html, /desk/* and /abroad.html; the app
+    // itself does no authentication at all. This report carries customer names, email
+    // addresses and card balances, so putting it on /api/ would have published exactly that
+    // to anyone who guessed the path. Living under /desk/ means it inherits the safety-net
+    // auth_basic already in place rather than depending on somebody remembering to add one.
+    // (The /desk/<branchId> matcher below cannot swallow it: its character class has no
+    // hyphen, so "giftcard-sweep" is not a branch id.)
+    if (req.method === 'GET' && p === '/desk/giftcard-sweep') {
+      const { totals, detail } = await runCardSweep({ dryRun: true });
+      return json(res, 200, {
+        totals,
+        // Codes are masked in every one of these lists except the expiry one, which needs a
+        // working link to be worth sending. This endpoint is behind the staff login, but it
+        // is still a page rather than a mailbox, so it gets the masked form only.
+        cancelled: detail.cancelled,
+        remind: detail.remind,
+        expiringSoon: detail.expiringSoon.map(({ code, bookUrl, ...rest }) => rest),
+        expired: detail.expired.map(({ code, bookUrl, ...rest }) => rest),
+      });
+    }
+
     if (req.method === 'GET' && p === '/desk/search') {
       const q = (url.searchParams.get('q') || '').trim();
       if (!q) return html(res, 200, renderDeskSearch({ query: '' }));
@@ -455,4 +480,7 @@ server.listen(CONFIG.port, () => {
   console.log(`Niobe integration on http://localhost:${CONFIG.port}  (stock demo=${CONFIG.demoMode}, gateway=${gatewayName}, payment demo=${CONFIG.paymentDemo})`);
   // Start the secure-or-release sweep (no-op unless RELEASE_ENABLED=true).
   startSweepLoop();
+  // The gift-card clocks. Separate from the no-show engine on purpose: they answer to
+  // different settings and one being off must never quietly turn the other off too.
+  startCardSweepLoop();
 });

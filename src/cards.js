@@ -597,6 +597,40 @@ export function quoteExtension(code) {
 // readOnly exists for the same reason it exists in the holds engine: opening a staff
 // dashboard must never itself cancel a customer's reservation. One background loop is
 // the only actor.
+// Put a reminder back on the pile after a failed send.
+//
+// sweepReservations marks a card reminded in the same pass that decides it is due — which is
+// right for the state changes (a reservation lapses at 48 hours whether or not anyone could
+// be emailed) and wrong for the reminders. If Graph mail is down for the ten seconds the
+// sweep runs, the card is stamped as reminded and the holder never hears from us: the 14-day
+// warning is the one that recovers a booking, and losing it silently means the card expires
+// and somebody loses money with no warning at all.
+//
+// So the sweep un-marks anything it could not actually send, and the next pass picks it up.
+// Retrying a reminder is harmless; never sending one is not.
+export function clearReminder(code, kind) {
+  const card = ledger[String(code || '').trim().toUpperCase()];
+  if (!card) return false;
+  if (kind === 'expiry') card.expiryRemindedAt = null;
+  else card.remindedAt = null;
+  saveLedger();
+  return true;
+}
+
+// Un-mark every card in one basket. The reserve reminder is per BASKET — one buyer, one
+// email, however many cards — and the report it comes from deliberately carries only masked
+// codes, so there is nothing to un-mark card-by-card and nor should there be. Adding real
+// codes to that report just to undo a failed send would put a bearer instrument into a
+// structure whose whole point is that it is safe to log.
+export function clearReminderByReference(reference) {
+  let n = 0;
+  for (const card of Object.values(ledger)) {
+    if (card.reference === reference && card.remindedAt) { card.remindedAt = null; n += 1; }
+  }
+  if (n) saveLedger();
+  return n;
+}
+
 export function sweepReservations(now = new Date(), { readOnly = false } = {}) {
   const t = now.getTime();
   const cancelled = [];

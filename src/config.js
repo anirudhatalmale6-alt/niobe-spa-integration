@@ -133,6 +133,22 @@ export const CONFIG = {
   fxFixedUplift: Number(process.env.FX_FIXED_UPLIFT ?? 0),
   stripeUkSecret: process.env.STRIPE_UK_SECRET || '',
 
+  // The gift-card sweep: the 48-hour reservation clock and the 90-day expiry clock.
+  //
+  // ENABLED defaults to TRUE because the cost of it being off is silent and cumulative —
+  // reservations never lapse and, far worse, nobody is ever warned their card is about to
+  // expire. An engine that is off should be a decision, not an oversight.
+  //
+  // DRY RUN defaults to TRUE for the opposite reason: the first live run cancels real orders
+  // and emails real customers, and that is a thing to watch for a few days first. Same
+  // report-only-then-arm pattern as the no-show release engine.
+  giftcardSweepEnabled: bool(process.env.GIFTCARD_SWEEP_ENABLED, true),
+  giftcardSweepDryRun: bool(process.env.GIFTCARD_SWEEP_DRY_RUN, true),
+  // Every 15 minutes. The deadlines are 24 hours and 14 days out, so nothing here needs to be
+  // prompt — this is frequent enough that a restart never leaves a long blind spot, and rare
+  // enough to be invisible.
+  giftcardSweepMs: Number(process.env.GIFTCARD_SWEEP_MS || 15 * 60 * 1000),
+
   // WHO ISSUES A NEW GIFT CARD — 'giftup' or 'niobe'. Niobe, 4 Sep 2026: "we are looking at
   // our own gift card setup, independent from gift up and managed solely by us".
   //

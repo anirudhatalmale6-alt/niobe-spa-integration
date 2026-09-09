@@ -70,7 +70,11 @@ function isClientBooking(appt) {
   return !!(appt.client && appt.client.mobile);
 }
 
-const DATA_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
+// NIOBE_DATA_DIR so a test run can be pointed at a throwaway directory. cards.js honoured it
+// and this file did not, which meant an end-to-end test against a temp ledger still wrote into
+// the LIVE data directory — found by doing exactly that. The isolation only works if every
+// module persisting money-adjacent state agrees to it, so all of them now do.
+const DATA_DIR = process.env.NIOBE_DATA_DIR || join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
 function auditRelease(entry) {
   try {
     mkdirSync(DATA_DIR, { recursive: true });

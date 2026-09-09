@@ -28,7 +28,11 @@ import { dirname, join } from 'path';
 // The order of operations is the same on both routes and is not negotiable: money first, card
 // second. The retired site did it the other way round — it wrote the voucher Active and THEN
 // asked for a payment link — which is why every abandoned checkout left a spendable card behind.
-const DATA_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
+// NIOBE_DATA_DIR so a test run can be pointed at a throwaway directory. cards.js honoured it
+// and this file did not, which meant an end-to-end test against a temp ledger still wrote into
+// the LIVE data directory — found by doing exactly that. The isolation only works if every
+// module persisting money-adjacent state agrees to it, so all of them now do.
+const DATA_DIR = process.env.NIOBE_DATA_DIR || join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
 const PURCHASES_FILE = join(DATA_DIR, 'gift-purchases.json');
 
 // The money side of an in-flight sale: reference -> record. PERSISTED, because the gap between

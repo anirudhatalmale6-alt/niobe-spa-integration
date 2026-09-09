@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { validateCard, redeem } from './giftup.js';
+import { getCard, spend as spendOwn, isExpired, publicCard } from './cards.js';
 import { lookupSimpleSpaCard } from './sscards.js';
 import { getBooking } from './bookings.js';
 import { depositOptions, makeReference } from './deposit.js';
@@ -20,7 +21,11 @@ import { markSecured, registerHold } from './holds.js';
 // order of operations is deliberate throughout and the balance is NEVER touched until
 // we know the redemption can cover what the booking needs.
 
-const DATA_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
+// NIOBE_DATA_DIR so a test run can be pointed at a throwaway directory. cards.js honoured it
+// and this file did not, which meant an end-to-end test against a temp ledger still wrote into
+// the LIVE data directory — found by doing exactly that. The isolation only works if every
+// module persisting money-adjacent state agrees to it, so all of them now do.
+const DATA_DIR = process.env.NIOBE_DATA_DIR || join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
 const LEDGER_FILE = join(DATA_DIR, 'gift-redemptions.json');
 
 // Persisted so a restart between redeeming and the customer refreshing can't cause a
@@ -69,12 +74,73 @@ export function existingRedemption(bookingId) { return ledger[String(bookingId)]
 // Pure lookup, no money moves. Tells the customer in plain terms whether the card
 // works and what it covers, which is what Niobe asked for ("read unexpired gift
 // cards and confirm").
+// A card from our own ledger, checked against a booking.
+//
+// Deliberately mirrors the GiftUp branch's SHAPE — same reasons, same refusals, same field
+// names on the way out — so the pages rendering this do not have to know which system issued
+// the card, and a future edit to one branch is obviously missing from the other.
+//
+// The one real difference is that this ledger is ours, so "expired" and "not paid" are facts
+// we hold rather than answers we asked someone else for. isExpired() is evaluated from the
+// DATE on every read: a sweep that is stopped or an hour behind must never be the reason an
+// expired card can still be spent.
+export function checkOwnCard(b, card, code) {
+  const opts = depositOptions(b.price, { giftCardOrCredit: false, requireFull: b.requireFull });
+
+  if (card.status === 'voided') return { ok: false, reason: 'voided', booking: b, card: publicCard(card) };
+  // A reserved card has not been paid for and its code was never released to anybody. If one
+  // is being presented, something is wrong upstream — but to the person at the desk it is
+  // simply not a valid card, and saying more would be telling them how the system works.
+  if (card.status === 'reserved' || card.status === 'cancelled') {
+    return { ok: false, reason: 'not_found', booking: b };
+  }
+  if (isExpired(card)) return { ok: false, reason: 'expired', booking: b, card: publicCard(card) };
+  if (!(card.balance > 0)) return { ok: false, reason: 'no_balance', booking: b, card: publicCard(card) };
+
+  const balance = card.balance;
+  const affordable = (opts.options || []).filter((o) => o.amount <= balance + 0.009);
+  const cheapest = (opts.options || []).reduce((min, o) => (!min || o.amount < min.amount ? o : min), null);
+
+  return {
+    ok: affordable.length > 0,
+    reason: affordable.length ? 'ok' : 'insufficient',
+    booking: b,
+    card: publicCard(card),
+    // Marks which ledger this came from, so redeemForBooking deducts from the right place
+    // rather than inferring it a second time and possibly differently.
+    source: 'niobe',
+    balance,
+    giftupBalance: null,
+    // No mirror check. Cards we issue are not written into SimpleSpa, so there is no second
+    // balance to disagree with — the double-spend risk the GiftUp branch guards against does
+    // not exist here. If Niobe ever start mirroring these, this is the line that has to change.
+    mirrorBalance: null,
+    diverged: false,
+    price: opts.price,
+    options: affordable,
+    needed: cheapest?.amount ?? opts.price,
+    shortfall: Math.max(0, Math.round(((cheapest?.amount ?? opts.price) - balance) * 100) / 100),
+  };
+}
+
 export async function checkGiftCard({ bookingId, code }) {
   const b = await getBooking(bookingId);
   if (!b) return { ok: false, reason: 'booking_not_found' };
 
   const already = existingRedemption(bookingId);
   if (already) return { ok: false, reason: 'already_redeemed', booking: b, redemption: already };
+
+  // OUR OWN LEDGER FIRST, and by lookup rather than by the shape of the code.
+  //
+  // Our codes happen to start "NB-", but deciding ownership from a prefix is a guess that
+  // silently stops being true the day the format changes. getCard() either has it or does
+  // not; there is nothing to be wrong about.
+  //
+  // First also matters: it is the only ledger we can actually deduct from, it needs no
+  // network call, and it cannot be down. A card of ours must never fall through to a GiftUp
+  // lookup that returns "not found" and gets reported to the customer as invalid.
+  const own = getCard(code);
+  if (own) return checkOwnCard(b, own, code);
 
   let card;
   try {
@@ -185,16 +251,37 @@ export async function redeemForBooking({ bookingId, code, option }) {
 
     // MONEY MOVES HERE. Everything after this point must be failure-tolerant: the
     // customer has now genuinely paid.
+    //
+    // Which ledger is decided by the CHECK, not worked out again here. check.source was
+    // established by the same lookup that produced the balance and the options; re-deriving
+    // it would open the door to checking one card and deducting from another.
     let r;
-    try {
-      r = await redeem(code, chosen.amount, {
+    if (check.source === 'niobe') {
+      const sp = spendOwn(code, chosen.amount, {
         reference,
         reason: `Niobe booking ${b.id} — ${b.service}`,
-        metadata: { bookingId: b.id, appointment_id: b.appointment_id, branchId: b.branchId },
+        branchId: b.branchId,
       });
-    } catch (e) {
-      // Nothing was deducted, so this is still a clean failure the customer can retry.
-      return { ok: false, reason: 'redeem_failed', message: e.message, booking: b, card: check.card };
+      // spend() refuses rather than clamps, and returns a reason. Every one of them is a
+      // clean failure — nothing was deducted — so the customer can retry or pay another way.
+      if (!sp.ok) {
+        return { ok: false, reason: sp.reason === 'insufficient' ? 'insufficient' : 'redeem_failed',
+          message: sp.reason, booking: b, card: check.card, balance: sp.balance ?? check.balance };
+      }
+      // Normalised to the same shape the GiftUp call returns, so everything downstream —
+      // the record, the pages, the reconciliation — stays one code path.
+      r = { transactionId: `NB-${reference}`, remainingCredit: sp.balance };
+    } else {
+      try {
+        r = await redeem(code, chosen.amount, {
+          reference,
+          reason: `Niobe booking ${b.id} — ${b.service}`,
+          metadata: { bookingId: b.id, appointment_id: b.appointment_id, branchId: b.branchId },
+        });
+      } catch (e) {
+        // Nothing was deducted, so this is still a clean failure the customer can retry.
+        return { ok: false, reason: 'redeem_failed', message: e.message, booking: b, card: check.card };
+      }
     }
 
     // Persist the redemption BEFORE anything else that could throw. If the process
@@ -215,6 +302,9 @@ export async function redeemForBooking({ bookingId, code, option }) {
       // and by how much the two ledgers disagreed at the moment it was spent.
       mirrorBalance: check.mirrorBalance ?? null,
       diverged: !!check.diverged,
+      // Which ledger this came out of. Without it, a year from now nobody reading this file
+      // can tell whether to reconcile a row against GiftUp's statement or our own.
+      source: check.source || 'giftup',
       at: new Date().toISOString(),
     };
     ledger[key] = record;
