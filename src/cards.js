@@ -295,7 +295,18 @@ function normaliseDeliverOn(raw, index) {
 // share a single payment reference. Either they all become paid or none of them do:
 // a part-paid basket is not a state the money can produce, because it is one charge.
 export function reserveBasket({ buyerName, buyerEmail, buyerPhone, items, channel = 'web' }) {
-  if (!isEmail(buyerEmail)) throw new Error('Please enter a valid email address for your receipt.');
+  // A counter sale may genuinely have no email. Plenty of walk-ins will not give one, and
+  // demanding it would send the front desk straight back to handwriting — which is the thing
+  // this replaces. The card works without it; only the emailed voucher and the expiry warning
+  // need an address, and the sweep already reports by name anyone it could not warn.
+  //
+  // Deliberately NOT a placeholder address. An invented one looks like real data on the staff
+  // screen, and worse, the expiry reminder would dutifully post to it every ninety days.
+  // Absent is a fact the rest of the system can act on; a fake address is a fact it cannot.
+  const counter = channel === 'counter';
+  if (!isEmail(buyerEmail) && !(counter && !String(buyerEmail || '').trim())) {
+    throw new Error('Please enter a valid email address for your receipt.');
+  }
   const list = Array.isArray(items) ? items : [items];
   if (!list.length) throw new Error('Please choose at least one gift card.');
   if (list.length > 50) throw new Error('Please split an order of more than 50 gift cards — contact us and we will arrange it.');
@@ -316,7 +327,7 @@ export function reserveBasket({ buyerName, buyerEmail, buyerPhone, items, channe
       currency: 'GHS',
       reference,
       buyerName: String(buyerName || '').trim() || 'Niobe customer',
-      buyerEmail: String(buyerEmail).trim(),
+      buyerEmail: String(buyerEmail || '').trim(),
       buyerPhone: String(buyerPhone || '').trim(),
       ...item,
       createdAt: now.toISOString(),
@@ -340,7 +351,7 @@ export function reserveBasket({ buyerName, buyerEmail, buyerPhone, items, channe
   });
 
   saveLedger();
-  auditLog({ event: 'reserved', reference, count: cards.length, total: money(cards.reduce((s, c) => s + c.faceValue, 0)), buyerEmail: cards[0].buyerEmail });
+  auditLog({ event: 'reserved', reference, channel, count: cards.length, total: money(cards.reduce((s, c) => s + c.faceValue, 0)), buyerEmail: cards[0].buyerEmail || null });
 
   return {
     reference,

@@ -10,6 +10,8 @@ import { getBooking, bookingDeposit, startDeposit, finalizeDeposit, listBookings
 import { startPurchase, finalizePurchase, getPurchase, giftCatalog } from './giftcards.js';
 import { sweepAll, sweepBranchReport, listHolds, startSweepLoop, secureAndConfirm } from './holds.js';
 import { startCardSweepLoop, runCardSweep } from './cardsweep.js';
+import { renderCardDesk, deskLookup, deskVoid, deskExtend, deskIssue } from './carddesk.js';
+import { designs as cardDesigns } from './voucher.js';
 // The gift-card page asks giftcards.js for the catalogue, not GiftUp directly: which
 // issuer is live decides where the package list comes from, and the page must never
 // render one catalogue while the checkout prices against the other.
@@ -225,6 +227,28 @@ const server = createServer(async (req, res) => {
     // auth_basic already in place rather than depending on somebody remembering to add one.
     // (The /desk/<branchId> matcher below cannot swallow it: its character class has no
     // hyphen, so "giftcard-sweep" is not a branch id.)
+    // The staff card desk. Under /desk/ so it inherits the nginx login — it can cancel a
+    // card, extend one, and create live money at the counter, so it must never be reachable
+    // without one. Placed before the /desk/<branchId> matcher for the same reason /desk/search
+    // is: that pattern would otherwise read "cards" as a branch id and answer 404.
+    if (p === '/desk/cards') {
+      const designs = CONFIG.giftcardIssuer === 'niobe' ? cardDesigns() : [];
+      if (req.method === 'GET') {
+        const code = url.searchParams.get('code') || '';
+        return html(res, 200, renderCardDesk({ query: code, found: deskLookup(code), designs }));
+      }
+      const body = parseBody(await readBody(req), req.headers['content-type']);
+      let message = null;
+      if (body.action === 'void') message = deskVoid(body);
+      else if (body.action === 'extend') message = deskExtend(body);
+      else if (body.action === 'issue') message = deskIssue(body);
+      // Re-read the card AFTER acting, so the panel shows the result rather than the state it
+      // was in when the form was drawn. Showing a stale balance next to "cancelled" is how
+      // somebody cancels the same card twice.
+      const code = body.action === 'issue' ? (message.code || '') : (body.code || '');
+      return html(res, 200, renderCardDesk({ query: code, found: deskLookup(code), message, designs }));
+    }
+
     if (req.method === 'GET' && p === '/desk/giftcard-sweep') {
       const { totals, detail } = await runCardSweep({ dryRun: true });
       return json(res, 200, {
