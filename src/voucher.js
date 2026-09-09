@@ -2,6 +2,7 @@ import { readdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { CONFIG } from './config.js';
+import { dataUri as qrDataUri } from './qr.js';
 
 // The gift-card DESIGNS, and the voucher built out of one.
 //
@@ -25,19 +26,33 @@ const DESIGN_DIR = join(HERE, '..', 'public', 'designs');
 //
 // Ties (28/31 at two picks, 33/34/35 at one) are in file order; there is nothing to choose
 // between them and pretending otherwise would be inventing a preference.
+//
+// `occasion` groups the picker. Niobe, 9 Sep: "the reason why we have a lot of card themes is
+// to try and accommodate every occasion" — which is the right instinct and the wrong layout.
+// Forty designs in one grid is a wall and people stop looking after about a dozen; six headings
+// with a handful under each keeps every design and costs the buyer no scrolling. So the answer
+// was never to cut them.
+//
+// ORDER OF THE GROUPS is by how much they actually sell, not alphabetical, so the first thing
+// on screen is the thing most people choose.
 const CATALOGUE = [
-  { id: 'add-01', name: 'Classic gold ribbon', file: 'add-01.jpg', picks: 600 },
-  { id: 'add-10', name: 'Midnight & gold',     file: 'add-10.jpg', picks: 22 },
-  { id: 'add-12', name: 'Gold bow',            file: 'add-12.jpg', picks: 18 },
-  { id: 'add-13', name: 'Red gift box',        file: 'add-13.jpg', picks: 18 },
-  { id: 'add-16', name: 'I love you',          file: 'add-16.jpg', picks: 14 },
-  { id: 'add-20', name: 'To a special friend', file: 'add-20.jpg', picks: 10 },
-  { id: 'add-28', name: 'To my husband',       file: 'add-28.jpg', picks: 2 },
-  { id: 'add-31', name: 'To my lover',         file: 'add-31.jpg', picks: 2 },
-  { id: 'add-33', name: 'To my wife',          file: 'add-33.jpg', picks: 1 },
-  { id: 'add-34', name: 'Botanical white',     file: 'add-34.jpg', picks: 1 },
-  { id: 'add-35', name: 'Black & gold',        file: 'add-35.jpg', picks: 1 },
+  { id: 'add-01', name: 'Classic gold ribbon', file: 'add-01.jpg', picks: 600, occasion: 'Any occasion' },
+  { id: 'add-10', name: 'Midnight & gold',     file: 'add-10.jpg', picks: 22,  occasion: 'Any occasion' },
+  { id: 'add-12', name: 'Gold bow',            file: 'add-12.jpg', picks: 18,  occasion: 'Any occasion' },
+  { id: 'add-13', name: 'Red gift box',        file: 'add-13.jpg', picks: 18,  occasion: 'Any occasion' },
+  { id: 'add-16', name: 'I love you',          file: 'add-16.jpg', picks: 14,  occasion: 'Love' },
+  { id: 'add-20', name: 'To a special friend', file: 'add-20.jpg', picks: 10,  occasion: 'Friendship' },
+  { id: 'add-28', name: 'To my husband',       file: 'add-28.jpg', picks: 2,   occasion: 'Love' },
+  { id: 'add-31', name: 'To my lover',         file: 'add-31.jpg', picks: 2,   occasion: 'Love' },
+  { id: 'add-33', name: 'To my wife',          file: 'add-33.jpg', picks: 1,   occasion: 'Love' },
+  { id: 'add-34', name: 'Botanical white',     file: 'add-34.jpg', picks: 1,   occasion: 'Any occasion' },
+  { id: 'add-35', name: 'Black & gold',        file: 'add-35.jpg', picks: 1,   occasion: 'Any occasion' },
 ];
+
+// The occasion each design belongs to is Niobe's call, not mine — these are a starting point
+// taken from the artwork itself ("To My Wife" is not ambiguous), and they will be replaced by
+// the tagged list when it comes back. An unrecognised occasion simply becomes its own heading,
+// so adding "Christmas" to the file needs no code change at all.
 
 // Only offer a design whose file is actually on disk. A picker that shows eleven options and
 // renders a broken image for one of them is worse than a picker that shows ten: the customer
@@ -77,6 +92,21 @@ export function resolveDesign(id) {
 
 export const DEFAULT_DESIGN = () => designs()[0]?.id || 'default';
 
+// Designs grouped for the picker, biggest-selling group first and, inside each, the
+// biggest-selling design first. Returns [{ occasion, designs: [...] }].
+export function designGroups() {
+  const groups = new Map();
+  for (const d of designs()) {
+    const key = d.occasion || 'Any occasion';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(d);
+  }
+  const weight = (list) => list.reduce((n, d) => n + (d.picks || 0), 0);
+  return [...groups.entries()]
+    .map(([occasion, list]) => ({ occasion, designs: list.slice().sort((a, b) => (b.picks || 0) - (a.picks || 0)) }))
+    .sort((a, b) => weight(b.designs) - weight(a.designs));
+}
+
 const esc = (s) => String(s ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -108,6 +138,18 @@ export function voucherHtml({
   const base = (CONFIG.publicUrl || '').replace(/\/+$/, '');
   const art = d ? `${base}/designs/${d.file}` : null;
   const expiry = longDate(expiresAt);
+  // The QR carries the balance page WITH the code in it, so scanning answers the question
+  // ("how much is left?") in one step rather than landing on a form to type the code into.
+  // Embedded as a data URI: the voucher has to work as an email, as a web page and on paper,
+  // and a second request for an image is one more thing to fail on any of the three.
+  //
+  // Only when there is a code. A specimen or a preview has none, and a QR pointing at a
+  // balance page for a card that does not exist teaches whoever scans it not to bother.
+  // `code=`, which is the parameter /balance already reads. A shorter `c=` would have made a
+  // marginally smaller symbol and landed every scan on an empty form — the QR scanning
+  // perfectly and achieving nothing, which is the failure nobody reports because it looks
+  // like it worked. Checked against the route rather than assumed.
+  const balanceQr = code ? qrDataUri(`${base}/balance?code=${encodeURIComponent(code)}`, { scale: 3, quiet: 3 }) : null;
   const to = String(recipientName || '').trim();
   const from = String(buyerName || '').trim();
 
@@ -136,9 +178,13 @@ export function voucherHtml({
      <div style="font-size:25px;font-weight:700;letter-spacing:2px;color:#2b2320;margin-top:5px;font-family:Consolas,'Courier New',monospace">${esc(code)}</div>
    </div>
    ${expiry ? `<div style="font-size:14px;color:#2b2320;margin-top:14px">Valid until <strong>${esc(expiry)}</strong></div>` : ''}
-   <div style="font-size:13px;color:#8b7d73;margin-top:6px;line-height:1.55">
+   ${balanceQr ? `<div style="margin-top:14px">
+     <img src="${balanceQr}" alt="Scan to check the balance" width="112" height="112" style="display:inline-block;border:0">
+     <div style="font-size:12px;color:#8b7d73;margin-top:4px">Scan to check the balance</div>
+   </div>` : ''}
+   <div style="font-size:13px;color:#8b7d73;margin-top:10px;line-height:1.55">
      Quote this code when you book, or hand it in at any Niobe branch.<br>
-     Check the balance any time at <a href="${esc(base)}/balance" style="color:#8a6a3c">${esc((base || '').replace(/^https?:\/\//, ''))}/balance</a>
+     Or type it in at <a href="${esc(base)}/balance" style="color:#8a6a3c">${esc((base || '').replace(/^https?:\/\//, ''))}/balance</a>
    </div>
  </td></tr>
  <tr><td style="background:#2b2926;color:#ddd2c7;padding:16px 20px;border-radius:0 0 14px 14px;text-align:center;font-size:12px;line-height:1.7">

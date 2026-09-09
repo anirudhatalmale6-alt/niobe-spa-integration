@@ -2,7 +2,7 @@
 // Shared styling with the staff dashboard (warm cream + gold Niobe palette).
 import { displayName as GATEWAY, displayNameOf, backup } from './gateway.js';
 import { CONFIG } from './config.js';
-import { designs } from './voucher.js';
+import { designs, designGroups } from './voucher.js';
 
 const GHS = (n) => `GHS ${Number(n).toLocaleString('en-GH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const SYMBOLS = { GBP: '£', USD: '$', EUR: '€' };
@@ -73,7 +73,12 @@ const shell = (title, body, tag = CONFIG.paymentDemo ? `${GATEWAY} Test Mode` : 
   /* The design grid. 3 across on a desktop, 2 on a phone — at 3 across on a narrow screen
      each tile is under 100px and the artwork stops being distinguishable, which defeats the
      point of choosing. The tile is the label, so the whole thing is the hit target. */
-  .dgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .dgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
+  /* The occasion heading. Small and gold rather than a big black title — it is a
+     signpost between rows of pictures, not a section of the page. */
+  .dgroup{font-size:12px;letter-spacing:1.2px;text-transform:uppercase;color:var(--gold-deep);
+    font-weight:600;margin:14px 0 8px}
+  .dgroup:first-of-type{margin-top:8px}
   @media (max-width:520px){.dgrid{grid-template-columns:repeat(2,1fr)}}
   .dopt{cursor:pointer;display:block;border:2px solid var(--line);border-radius:12px;padding:6px;
     background:#fff;text-align:center;transition:border-color .12s}
@@ -382,17 +387,30 @@ export function renderGiftCardPage(catalog, note) {
   // cards ourselves is what makes the choice expressible, so the control appears exactly when
   // it can be honoured and not one deploy sooner.
   const designList = CONFIG.giftcardIssuer === 'niobe' ? designs() : [];
-  const designSection = designList.length ? `
+  const dGroups = designList.length ? designGroups() : [];
+  // GROUPED BY OCCASION, at Niobe's request — "categorisation is a must". Their instinct to
+  // carry a design for every occasion is right; showing all of them at once is what makes it
+  // unusable, because people stop looking after about a dozen tiles. Headings cost nothing and
+  // keep every design reachable.
+  //
+  // The default stays checked wherever it happens to sit, rather than being hoisted to the top
+  // of the first group: it IS the top of the first group, because the groups are ordered by how
+  // much they sell. If that ever stops being true the checked one is still the right default,
+  // just not the first thing on screen — which is a display quirk, not a wrong card.
+  let designIndex = 0;
+  const designSection = dGroups.length ? `
         <div style="border-top:1px dashed var(--line);margin:16px 0 0"></div>
-        <label class="lab" style="font-size:13px;color:var(--muted);display:block;margin:14px 0 8px">Choose a design</label>
+        <label class="lab" style="font-size:13px;color:var(--muted);display:block;margin:14px 0 4px">Choose a design</label>
+        ${dGroups.map((g) => `
+        <div class="dgroup">${g.occasion}</div>
         <div class="dgrid">
-          ${designList.map((d, i) => `
+          ${g.designs.map((d) => `
           <label class="dopt">
-            <input type="radio" name="design" value="${d.id}"${i === 0 ? ' checked' : ''}>
+            <input type="radio" name="design" value="${d.id}"${designIndex++ === 0 ? ' checked' : ''}>
             <img src="/designs/${d.file}" alt="${d.name}" loading="lazy">
             <span>${d.name}</span>
           </label>`).join('')}
-        </div>` : '';
+        </div>`).join('')}` : '';
 
   // "For those who want to print themselves" — Niobe, 3 Sep. Offered only on our own cards for
   // the same reason as the picker: GiftUp decides its own delivery, we do not.
