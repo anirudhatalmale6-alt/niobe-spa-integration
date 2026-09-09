@@ -199,6 +199,35 @@ fixes past months. Aliases in this file do.
 - An alias must never duplicate another person's name or alias, or the later entry
   silently wins the lookup and one person is paid for another's work.
 
+### Editing the staff list without touching JSON
+
+```bash
+node scripts/staff-map-csv.mjs --export                       # -> data/staff-map.csv
+node scripts/staff-map-csv.mjs --import data/staff-map.csv    # check it, save nothing
+node scripts/staff-map-csv.mjs --import data/staff-map.csv --write
+```
+
+JSON is the right storage format and the wrong editing format for anyone who is not a
+programmer: one missing comma stops the file parsing, with no clue which line. The CSV
+opens in Excel and cannot break that way.
+
+The export also reads the CURRENT staff names live from all five branches, so the sheet
+shows which branch spells each therapist which way — which turns "make the names tally"
+into reading a column rather than an exercise in memory. Anyone in SimpleSpa but not on
+the payroll is listed at the bottom under **NEW**; the house and front-desk logins are
+listed separately under **IGNORED ON PURPOSE**, so nobody puts a till account on the pay
+run while trying to be helpful.
+
+Import validates and **refuses to write anything at all** if any row is wrong — bad
+percentage, bad date format, or, the one that matters, two people claiming the same name
+or alias. That last case is why the check exists: one lookup key with two owners means
+the later entry silently wins, so one therapist is paid for another's work and nothing on
+the payroll looks wrong. Verified by feeding it a deliberately broken sheet: three errors
+reported, exit code 2, live list untouched.
+
+Export → import → export is lossless, and `rates` and `exclude` survive a round trip
+untouched (neither is editable from the sheet by design).
+
 The report refuses to be quietly wrong: it lists therapists it could not match, names
 that may be one person twice, treatments with no rate, and any branch that failed to
 answer. Read the `CHECKS` block at the bottom of the CSV before paying from it.
