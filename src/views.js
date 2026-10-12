@@ -3,6 +3,14 @@
 import { displayName as GATEWAY, displayNameOf, backup } from './gateway.js';
 import { CONFIG } from './config.js';
 import { designs, designGroups } from './voucher.js';
+import { policyInForce, POLICY_FROM_LABEL, lateFeeNotice, LATE_FEE_AGREE_LABEL } from './policy.js';
+
+// The late-change notice and the box that must be ticked, shared by every page that is
+// about to use a gift card for a booking. `required` stops the browser; server.js checks again.
+const lateFeeAgree = (err) => `
+        <div class="note" style="text-align:left;margin:14px 0 8px;border-left:3px solid var(--gold-deep);padding-left:10px">${lateFeeNotice()}</div>
+        ${err ? '<div class="note" style="text-align:left;color:#a3332b;margin:0 0 6px">Please tick the box below to continue.</div>' : ''}
+        <label style="display:flex;gap:10px;align-items:flex-start;font-size:14px;margin:6px 0 12px"><input type="checkbox" name="agree" value="yes" required style="margin-top:3px"> <span>${LATE_FEE_AGREE_LABEL}</span></label>`;
 
 const GHS = (n) => `GHS ${Number(n).toLocaleString('en-GH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const SYMBOLS = { GBP: '£', USD: '$', EUR: '€' };
@@ -805,6 +813,7 @@ export function renderGiftRedeemCheck(c) {
         <input type="hidden" name="bookingId" value="${b.id}">
         <input type="hidden" name="code" value="${c.card.code || ''}">
         ${opts}
+        ${lateFeeAgree(c.agreeError)}
         <button class="btn" type="submit">Use my gift card &amp; confirm booking</button>
       </form>
       <div class="note">The amount you choose is deducted from your gift card and your appointment is confirmed straight away. Any remaining balance stays on the card for next time.</div>
@@ -860,7 +869,9 @@ export function renderGiftRedeemProblem(c) {
   const b = c.booking;
   const msg = {
     not_found: 'We couldn\'t find that gift card code. Please check the code on your voucher email and try again — it\'s easy to mistype.',
-    expired: 'This gift card has passed its expiry date, so it can\'t be used online. Please give us a call — we\'ll see what we can do for you.',
+    expired: policyInForce()
+      ? `This gift card has passed its expiry date. Since ${POLICY_FROM_LABEL} our gift cards can no longer be extended, so unfortunately it can't be used.`
+      : 'This gift card has passed its expiry date, so it can\'t be used online. Please give us a call — we\'ll see what we can do for you.',
     voided: 'This gift card is no longer active. Please give us a call and we\'ll look into it for you.',
     not_redeemable: 'This gift card can\'t be redeemed at the moment. Please give us a call and we\'ll sort it out.',
     already_redeemed: 'This booking has already been paid with a gift card, so there\'s nothing more to pay. If that doesn\'t look right, please contact us.',
@@ -901,6 +912,7 @@ export function renderGiftRedeemManual(c) {
       <form method="POST" action="/pay/gift-card/claim" style="margin-top:16px">
         <input type="hidden" name="bookingId" value="${b.id}">
         <input type="hidden" name="code" value="${ss.code}">
+        ${lateFeeAgree(c.agreeError)}
         <button class="btn" type="submit">Use this card for my booking</button>
       </form>
       <div class="note">${ss.extended ? 'Your card has been extended, so our team applies it for you by hand rather than automatically.' : 'This is one of our earlier gift cards, which our team applies for you by hand rather than automatically.'} We'll hold your appointment straight away and the salon will apply the card and confirm — there's nothing else for you to do.</div>
@@ -1043,9 +1055,10 @@ export function renderBalanceExpired(r) {
           We can extend this card by ${r.extendDays} days for ${money(r.extendFeeGHS, 'GHS')}. Give us a call or
           drop into any branch with the card and we'll sort it out — the balance above is untouched and stays yours.
         </div>` : `
-        <div class="note" style="text-align:left">
-          Please give us a call and we'll see what we can do for you — there's still ${money(r.balance ?? 0, cur)}
-          on this card and we'd rather you had the treatment than lost it.
+        <div class="note" style="text-align:left">${policyInForce()
+          ? `Since ${POLICY_FROM_LABEL} our gift cards can no longer be extended, so unfortunately this balance can't be used.`
+          : `Please give us a call and we'll see what we can do for you — there's still ${money(r.balance ?? 0, cur)}
+          on this card and we'd rather you had the treatment than lost it.`}
         </div>`}
       <a class="btnAlt" href="/balance">Check another card</a>
     </div>`, '');

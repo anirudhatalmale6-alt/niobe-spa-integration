@@ -10,7 +10,7 @@ import { getBooking, bookingDeposit, startDeposit, finalizeDeposit, listBookings
 import { startPurchase, finalizePurchase, getPurchase, giftCatalog } from './giftcards.js';
 import { sweepAll, sweepBranchReport, listHolds, startSweepLoop, secureAndConfirm } from './holds.js';
 import { startCardSweepLoop, runCardSweep } from './cardsweep.js';
-import { renderCardDesk, deskLookup, deskVoid, deskExtend, deskIssue } from './carddesk.js';
+import { renderCardDesk, deskLookup, deskVoid, deskExtend, deskIssue, deskLateFee } from './carddesk.js';
 import { designs as cardDesigns } from './voucher.js';
 // The gift-card page asks giftcards.js for the catalogue, not GiftUp directly: which
 // issuer is live decides where the package list comes from, and the page must never
@@ -241,6 +241,7 @@ const server = createServer(async (req, res) => {
       let message = null;
       if (body.action === 'void') message = deskVoid(body);
       else if (body.action === 'extend') message = deskExtend(body);
+      else if (body.action === 'latefee') message = deskLateFee(body);
       else if (body.action === 'issue') message = deskIssue(body);
       // Re-read the card AFTER acting, so the panel shows the result rather than the state it
       // was in when the form was drawn. Showing a stale balance next to "cancelled" is how
@@ -352,14 +353,26 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === 'POST' && p === '/pay/gift-card/redeem') {
       const body = parseBody(await readBody(req), req.headers['content-type']);
-      const r = await redeemForBooking({ bookingId: body.bookingId, code: body.code, option: body.option });
+      // The late-change notice must be agreed before the card is touched. The box is
+      // `required` in the page, but a form can be posted without the page, so ask again here.
+      if (body.agree !== 'yes') {
+        const c = await checkGiftCard({ bookingId: body.bookingId, code: body.code });
+        if (c.ok) return html(res, 200, renderGiftRedeemCheck({ ...c, agreeError: true }));
+        return html(res, 200, renderGiftRedeemProblem(c));
+      }
+      const r = await redeemForBooking({ bookingId: body.bookingId, code: body.code, option: body.option, agreed: true });
       if (r.ok) return html(res, 200, renderGiftRedeemDone(r));
       if (r.reason === 'insufficient') return html(res, 200, renderGiftRedeemShort(r));
       return html(res, 200, renderGiftRedeemProblem(r));
     }
     if (req.method === 'POST' && p === '/pay/gift-card/claim') {
       const body = parseBody(await readBody(req), req.headers['content-type']);
-      const r = await claimSimpleSpaCard({ bookingId: body.bookingId, code: body.code });
+      if (body.agree !== 'yes') {
+        const c = await checkGiftCard({ bookingId: body.bookingId, code: body.code });
+        if (c.reason === 'simplespa_manual') return html(res, 200, renderGiftRedeemManual({ ...c, agreeError: true }));
+        return html(res, 200, renderGiftRedeemProblem(c));
+      }
+      const r = await claimSimpleSpaCard({ bookingId: body.bookingId, code: body.code, agreed: true });
       if (r.ok) return html(res, 200, renderGiftRedeemClaimed(r));
       return html(res, 200, renderGiftRedeemProblem(r));
     }

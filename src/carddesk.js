@@ -1,8 +1,9 @@
 import { CONFIG } from './config.js';
 import {
   getCard, publicCard, lookupAnyCard, voidCard, extendCard, quoteExtension,
-  reserveBasket, markPaid, basketCards, mask, EXTENSION_DAYS, GRACE_DAYS,
+  reserveBasket, markPaid, basketCards, mask, EXTENSION_DAYS, GRACE_DAYS, chargeLateFee,
 } from './cards.js';
+import { POLICY_FROM_LABEL, LATE_KINDS, LATE_FEE_GHS, policyInForce } from './policy.js';
 import { voucherHtml } from './voucher.js';
 
 // The staff side of the gift-card ledger: look a card up, sell one over the counter, cancel
@@ -33,6 +34,14 @@ const WHY = {
   not_paid: 'That card has not been paid for, so there is nothing to cancel.',
   not_spendable: 'That card is not active.',
   not_extendable: 'Only a paid or expired card can be extended.',
+  extensions_ended: `Gift cards can no longer be extended — that ended on ${POLICY_FROM_LABEL}.`,
+  expires_after_cutoff: `This card expires on or after ${POLICY_FROM_LABEL}, so it cannot be extended — from that date no card can be.`,
+  fee_not_in_force: `The late-change fee only applies from ${POLICY_FROM_LABEL}.`,
+  bad_kind: 'Choose what happened: late cancellation, late reschedule or no-show.',
+  fee_needs_staff: 'Please enter your name.',
+  fee_needs_booking: 'Enter the booking it is for, so it cannot be charged twice.',
+  fee_already_charged: 'The fee for that booking has already been taken off this card.',
+  expired: 'That card has expired, so nothing can be taken off it.',
   no_balance: 'That card has nothing left on it, so an extension would buy nothing.',
   grace_needs_staff: 'The free extension has to be given by a named member of staff.',
   grace_already_used: 'The free extension has already been used on this card, once is the limit.',
@@ -73,6 +82,12 @@ export function deskVoid({ code, reason, by }) {
   const r = voidCard(normCode(code), { reason: clean(reason), by: clean(by) });
   return r.ok ? { ok: true, message: 'Card cancelled. Its balance is now zero and it cannot be used.' }
               : { ok: false, message: why(r.reason) };
+}
+
+export function deskLateFee({ code, by, kind, bookingRef }) {
+  const r = chargeLateFee(normCode(code), { kind, bookingRef: clean(bookingRef), by: clean(by) });
+  if (!r.ok) return { ok: false, message: why(r.reason) };
+  return { ok: true, message: `${money(r.fee)} late-change fee taken${r.partial ? ' (all that was left on the card)' : ''}. Balance now ${money(r.balance)}.` };
 }
 
 export function deskExtend({ code, by, reason, grace, feeGHS, paymentRef }) {
@@ -218,10 +233,10 @@ function cardPanel(found) {
   <div class="cols">
     <div class="card">
       <h2>Extend it</h2>
-      ${q.ok ? `<div class="row"><span class="k">Price for this card</span><span class="v">${esc(money(q.feeGHS))} for ${q.days} days</span></div>
+      ${q.ok && q.blocked ? `<p class="warn" style="font-size:13px;margin:0">${esc(why(q.blocked))}</p>` : q.ok ? `<div class="row"><span class="k">Price for this card</span><span class="v">${esc(money(q.feeGHS))} for ${q.days} days</span></div>
       <div class="row"><span class="k">Free ${q.graceDays} days</span><span class="v">${q.graceAvailable ? 'available, once' : 'already used'}</span></div>
       ${q.worthIt === false ? '<p class="warn" style="font-size:13px;margin:10px 0 0">The fee is worth more than the card. Give the free days instead.</p>' : ''}` : ''}
-      <form method="POST" action="/desk/cards">
+      ${q.ok && q.blocked ? '' : `<form method="POST" action="/desk/cards">
         <input type="hidden" name="action" value="extend">
         <input type="hidden" name="code" value="${esc(c.code || '')}">
         <label>Your name</label><input name="by" required placeholder="Who is doing this">
@@ -234,8 +249,21 @@ function cardPanel(found) {
         </div>
         <button type="submit">Extend for ${EXTENSION_DAYS} days</button>
         ${q.graceAvailable ? `<button class="ghost" type="submit" name="grace" value="true">Give the free ${GRACE_DAYS} days</button>` : ''}
-      </form>
+      </form>`}
     </div>
+    ${policyInForce() && c.status === 'paid' ? `<div class="card">
+      <h2>Late change or no-show</h2>
+      <p style="color:var(--muted);font-size:13px;margin:0">Takes ${esc(money(LATE_FEE_GHS))} off the card, or whatever is left if less. Once per booking.</p>
+      <form method="POST" action="/desk/cards">
+        <input type="hidden" name="action" value="latefee">
+        <input type="hidden" name="code" value="${esc(c.code || '')}">
+        <label>What happened</label>
+        <select name="kind" required>${Object.entries(LATE_KINDS).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('')}</select>
+        <label>Booking</label><input name="bookingRef" required placeholder="Client name and appointment date, or the booking reference">
+        <label>Your name</label><input name="by" required placeholder="Who is doing this">
+        <button class="danger" type="submit">Take the fee</button>
+      </form>
+    </div>` : ''}
     <div class="card">
       <h2>Cancel it</h2>
       <p style="color:var(--muted);font-size:13px;margin:0">This sets the balance to zero for good. Use it for a refund, a duplicate or a card issued in error — not for a card the customer has simply finished.</p>

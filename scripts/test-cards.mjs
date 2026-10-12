@@ -14,6 +14,9 @@ import { join } from 'node:path';
 const dir = mkdtempSync(join(tmpdir(), 'niobe-cards-'));
 process.env.NIOBE_DATA_DIR = dir;
 process.env.GIFTCARD_RESERVE_HOURS = '48';
+// These tests are about HOW an extension works, so they run before Niobe's 1 December 2026
+// no-extensions rule. That rule has its own suite: scripts/test-policy.mjs.
+process.env.GIFTCARD_POLICY_FROM = '2099-01-01';
 
 const {
   reserveBasket, markPaid, spend, unspend, voidCard, sweepReservations, extendCard,

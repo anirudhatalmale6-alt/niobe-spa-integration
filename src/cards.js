@@ -6,6 +6,7 @@ import { CONFIG } from './config.js';
 import { validateCard as validateGiftUpCard } from './giftup.js';
 import { lookupSimpleSpaCard } from './sscards.js';
 import { GIFTCARD_REF_CODE } from './hubtel.js';
+import { extensionBlocked, policyInForce, lateFeeFor, LATE_KINDS, LATE_FEE_GHS } from './policy.js';
 
 // Niobe's OWN gift-card ledger — the system of record for cards sold on the new site,
 // replacing GiftUp for new sales. GiftUp and SimpleSpa cards already in customers'
@@ -469,6 +470,32 @@ export function spend(code, amount, { reason, reference, branchId, by } = {}) {
   return { ok: true, spent: amt, balance: card.balance, card: publicCard(card) };
 }
 
+// The late-change / no-show fee (policy from 1 December 2026): GHS 150 off the card, or
+// whatever is left if that is less. Staff trigger it — they are the ones who know a client
+// cancelled at short notice or did not come — and it is tied to the booking so the same
+// booking can never be charged twice, however many times the button is pressed.
+export function chargeLateFee(code, { kind, bookingRef, by, now = new Date() } = {}) {
+  if (!policyInForce(now)) return { ok: false, reason: 'fee_not_in_force' };
+  if (!LATE_KINDS[kind]) return { ok: false, reason: 'bad_kind' };
+  const who = String(by || '').trim();
+  const ref = String(bookingRef || '').trim();
+  if (!who) return { ok: false, reason: 'fee_needs_staff' };
+  if (!ref) return { ok: false, reason: 'fee_needs_booking' };
+  const card = ledger[String(code || '').trim().toUpperCase()];
+  if (!card) return { ok: false, reason: 'not_found' };
+  const dup = (card.transactions || []).find((t) => t.type === 'spend' && t.lateFee && t.ref === ref);
+  if (dup) return { ok: false, reason: 'fee_already_charged', at: dup.at, amount: -dup.amount };
+  const fee = lateFeeFor(card.balance);
+  if (!(fee > 0)) return { ok: false, reason: 'no_balance' };
+  const r = spend(card.code, fee, { reason: `Late-change fee: ${LATE_KINDS[kind]}`, reference: ref, by: who });
+  if (!r.ok) return r;
+  // Marked on the transaction itself, so the duplicate check above reads the card's own
+  // history rather than a second list that could drift from it.
+  card.transactions[card.transactions.length - 1].lateFee = kind;
+  saveLedger();
+  return { ...r, fee, kind, partial: fee < LATE_FEE_GHS };
+}
+
 // Undo a spend — the till mis-keyed it, or the booking it paid for fell through. This
 // exists because a gift card is not a card authorisation: walking away does not reverse
 // it, so there has to be a deliberate way back.
@@ -514,6 +541,10 @@ export function extendCard(code, { days, feeGHS, paymentRef = null, by = null, r
   const card = ledger[String(code || '').trim().toUpperCase()];
   if (!card) return { ok: false, reason: 'not_found' };
   if (![STATUS.PAID, STATUS.EXPIRED].includes(card.status)) return { ok: false, reason: 'not_extendable', status: card.status };
+  // Niobe's policy from 1 December 2026 (policy.js): no extensions of any kind — paid, free
+  // grace or a manager's override. Checked before anything else so no path slips past it.
+  const blocked = extensionBlocked(card.expiresAt);
+  if (blocked) return { ok: false, reason: blocked, expiresAt: card.expiresAt };
   // A spent-out card has nothing to extend; taking a fee for it would be taking money
   // for nothing, and the customer would only discover that at the till.
   if (!(card.balance > 0)) return { ok: false, reason: 'no_balance' };
@@ -592,7 +623,9 @@ export function quoteExtension(code) {
     // The desk needs to know before it offers: a second free three days is not on the
     // table, and a fee that swallows the balance needs a manager, not a card machine.
     graceDays: GRACE_DAYS,
-    graceAvailable: !card.graceUsedAt && card.balance > 0,
+    graceAvailable: !card.graceUsedAt && card.balance > 0 && !extensionBlocked(card.expiresAt),
+    // Why the desk must not offer an extension at all, if it must not (policy.js).
+    blocked: extensionBlocked(card.expiresAt),
     graceUsedAt: card.graceUsedAt || null,
     worthIt: card.balance > fee,
     expiresAt: card.expiresAt,
@@ -741,7 +774,9 @@ export function sweepReservations(now = new Date(), { readOnly = false } = {}) {
     bookUrl: `${(CONFIG.publicUrl || '').replace(/\/$/, '')}/book?gc=${encodeURIComponent(c.code)}`,
     // The fee for THIS card, not the headline one. A reminder that quotes GHS 200 at the
     // holder of a GHS 150 card tells them to give up, and it is not even the price.
-    extendFeeGHS: extensionFee(c),
+    // null = this card cannot be extended (policy from 1 December 2026), so the reminder
+    // must not offer it — quoting a price for something we will refuse is worse than silence.
+    extendFeeGHS: extensionBlocked(c.expiresAt) ? null : extensionFee(c),
     extendDays: EXTENSION_DAYS,
   });
 
@@ -836,7 +871,7 @@ export async function lookupAnyCard(code, { skipVariants = false, variantCap = 8
       daysLeft: daysLeft(own),
       // What it costs to bring it back, so the page can offer the extension in the same
       // breath as the bad news rather than sending the customer to phone a branch.
-      extendable: expired && own.balance > 0,
+      extendable: expired && own.balance > 0 && !extensionBlocked(own.expiresAt),
       extendFeeGHS: extensionFee(own),
       extendDays: EXTENSION_DAYS,
       valid: own.status === STATUS.PAID && own.balance > 0 && !expired,

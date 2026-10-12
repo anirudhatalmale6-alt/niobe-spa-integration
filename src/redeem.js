@@ -246,7 +246,7 @@ export async function checkGiftCard({ bookingId, code }) {
 // finished writing yet. Cheap, and the window it closes is a real double deduction.
 const inFlight = new Set();
 
-export async function redeemForBooking({ bookingId, code, option }) {
+export async function redeemForBooking({ bookingId, code, option, agreed = false }) {
   const key = String(bookingId);
 
   const already = existingRedemption(key);
@@ -323,6 +323,8 @@ export async function redeemForBooking({ bookingId, code, option }) {
       // Which ledger this came out of. Without it, a year from now nobody reading this file
       // can tell whether to reconcile a row against GiftUp's statement or our own.
       source: check.source || 'giftup',
+      // Evidence the customer saw and accepted the late-change fee for THIS booking.
+      lateFeeTermsAgreedAt: agreed ? new Date().toISOString() : null,
       at: new Date().toISOString(),
     };
     ledger[key] = record;
@@ -378,7 +380,7 @@ export async function redeemForBooking({ bookingId, code, option }) {
 // if staff never apply the card in SimpleSpa, the customer keeps their balance AND
 // the slot. That is why every claim is written to a work-list rather than trusted
 // to memory.
-export async function claimSimpleSpaCard({ bookingId, code }) {
+export async function claimSimpleSpaCard({ bookingId, code, agreed = false }) {
   const key = String(bookingId);
   const already = existingRedemption(key);
   if (already) return { ok: true, replay: true, redemption: already, booking: await getBooking(bookingId) };
@@ -412,6 +414,7 @@ export async function claimSimpleSpaCard({ bookingId, code }) {
     reference,
     manual: true,
     confirmed: false,
+    lateFeeTermsAgreedAt: agreed ? new Date().toISOString() : null,
     at: new Date().toISOString(),
   };
   ledger[key] = record;
