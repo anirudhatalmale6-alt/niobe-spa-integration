@@ -100,7 +100,25 @@ export async function checkGiftCard({ bookingId, code }) {
     return { ok: false, reason: 'not_found', booking: b };
   }
   if (card.voided) return { ok: false, reason: 'voided', booking: b, card };
-  if (card.expired) return { ok: false, reason: 'expired', booking: b, card };
+  if (card.expired) {
+    // EXTENDED CARDS. Paid extensions are sold and recorded by branch staff in SimpleSpa
+    // only — GiftUp keeps the card's ORIGINAL expiry for ever. So "GiftUp says expired" is
+    // not an answer on its own: the same code in SimpleSpa may carry a later date. Refusing
+    // here turned away customers who had paid for that extension (14 cards / GHS 2,769
+    // live on 12 Oct 2026). GiftUp will not deduct from an expired card, so an extended one
+    // goes the way every SimpleSpa card already goes: verified here, applied by staff.
+    let ext = null;
+    try { ext = await lookupSimpleSpaCard(code); } catch { /* fall through to 'expired' */ }
+    if (ext?.found && ext.valid) {
+      // Lower of the two balances, exactly as the mirror check below — never generous.
+      const balance = card.balance == null ? ext.balance : Math.min(ext.balance, card.balance);
+      return {
+        ok: false, reason: 'simplespa_manual', booking: b, card,
+        ssCard: { ...ext, balance, extended: true },
+      };
+    }
+    return { ok: false, reason: 'expired', booking: b, card };
+  }
   if (!card.valid) return { ok: false, reason: 'not_redeemable', booking: b, card };
 
   // CROSS-LEDGER SAFETY CHECK.
