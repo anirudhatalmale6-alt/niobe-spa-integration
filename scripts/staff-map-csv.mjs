@@ -24,6 +24,7 @@
 import { readFileSync, writeFileSync, existsSync, renameSync, mkdirSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { parseCsv } from '../src/csv.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const JSON_FILE = process.env.STAFF_MAP_FILE || join(ROOT, 'data', 'staff-map.json');
@@ -42,24 +43,6 @@ const esc = (v) => {
 // A CSV parser rather than split(',') — an alias list is comma-separated and therefore lives
 // inside quotes, and splitting on commas would tear it apart into fragments that each look
 // like a real column. Excel writes quotes correctly; the reader has to honour them.
-function parseCsv(text) {
-  const rows = [];
-  let row = [], field = '', inQuotes = false;
-  const s = text.replace(/^﻿/, '').replace(/\r\n/g, '\n');
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-    if (inQuotes) {
-      if (c === '"' && s[i + 1] === '"') { field += '"'; i++; }
-      else if (c === '"') inQuotes = false;
-      else field += c;
-    } else if (c === '"') inQuotes = true;
-    else if (c === ',') { row.push(field); field = ''; }
-    else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
-    else field += c;
-  }
-  if (field.length || row.length) { row.push(field); rows.push(row); }
-  return rows.filter((r) => r.some((c) => String(c).trim() !== ''));
-}
 
 const HEAD = ['Therapist', 'Commission %', 'Still employed?', 'Left on (YYYY-MM-DD)',
   'Other spellings seen (comma separated)', 'Currently in SimpleSpa as', 'Branches'];

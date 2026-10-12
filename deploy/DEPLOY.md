@@ -166,6 +166,23 @@ node scripts/payroll-report.mjs 2026-08     # writes data/payroll-2026-08.csv
 Consolidates every therapist's paid treatments across all five branches into one line
 each. Read-only against SimpleSpa.
 
+**Top-ups and deductions** come from Niobe, not SimpleSpa — one sheet per month:
+
+```bash
+node scripts/payroll-report.mjs 2026-10 --adjustments-template   # blank sheet, every current therapist listed
+# Niobe fills in data/payroll-adjustments-2026-10.csv (Top-up / Deductions / Note), then:
+node scripts/payroll-report.mjs 2026-10
+```
+
+The report adds Top-up, Deductions and "Pay due before tax" columns. The sheet is read
+strictly: an unknown name, an amount that is not a number, or the same person twice stops
+the run with every problem listed (exit 2) — a skipped deduction would look exactly like a
+correct payroll. No sheet is fine, and the CHECKS section says which it was. Like the staff
+map, these files are gitignored (names and pay).
+
+PAYE (`src/paye.js`, GRA 2026 bands from 1 Sep 2026) is built and tested but not yet in the
+report — it needs each person's basic salary and whether they are an employee or casual.
+
 **It depends on `data/staff-map.json`, which is NOT in this repo and never should be.**
 It holds 36 employees' names and commission rates; the repo is public. It is also the
 single thing that makes the report correct, so it must be backed up somewhere Niobe

@@ -3,6 +3,9 @@
 //
 //   node scripts/payroll-report.mjs 2026-07            -> writes data/payroll-2026-07.csv
 //   node scripts/payroll-report.mjs 2026-07 --stdout   -> prints instead of writing
+//   node scripts/payroll-report.mjs 2026-07 --adjustments-template
+//        -> writes data/payroll-adjustments-2026-07.csv, a blank top-up / deductions sheet
+//           with every current therapist already listed. Fill it in, then run the report.
 //
 // Produces the "total summary for each staff" Niobe asked for: one line per
 // therapist with her work consolidated across every branch she covered, which is
@@ -12,10 +15,11 @@
 // dependencies, and a CSV opens straight into Excel and into whatever the
 // accountant uses. Written UTF-8 with a BOM so Excel keeps the GHS figures and
 // any accented name intact instead of mangling them.
-import { writeFileSync, mkdirSync } from 'fs';
+import { writeFileSync, mkdirSync, existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { runPayroll, loadStaffMap } from '../src/payroll.js';
+import { adjustmentsTemplate, loadAdjustments, applyAdjustments } from '../src/adjustments.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -40,7 +44,25 @@ if (!staffMap.loaded) {
   process.exit(1);
 }
 
+const adjFile = join(ROOT, 'data', `payroll-adjustments-${month}.csv`);
+if (process.argv.includes('--adjustments-template')) {
+  // Never overwrite: a half-filled sheet is somebody's afternoon of work.
+  if (existsSync(adjFile)) { console.error(`${adjFile} already exists — not overwriting it.`); process.exit(1); }
+  mkdirSync(join(ROOT, 'data'), { recursive: true });
+  writeFileSync(adjFile, adjustmentsTemplate(staffMap, month));
+  console.log(`Wrote ${adjFile}`);
+  process.exit(0);
+}
+// Checked BEFORE the slow SimpleSpa run, and fatal: a payroll that quietly skipped a
+// deduction it could not read looks exactly like a correct one.
+const adj = loadAdjustments(adjFile, staffMap);
+if (adj.errors.length) {
+  console.error(`The top-up / deductions sheet has problems — nothing written:\n  ${adj.errors.join('\n  ')}`);
+  process.exit(2);
+}
+
 const r = await runPayroll({ start, end, staffMap });
+const A = applyAdjustments(r.rows, adj.entries);
 
 // Categories actually worked this month, busiest first, so the columns are stable
 // across the sheet and a therapist's split is readable at a glance.
@@ -59,15 +81,20 @@ out.push([]);
 
 out.push(line([
   'Therapist', 'Treatments', 'Service value (GHS)', 'Commission (GHS)',
+  'Top-up (GHS)', 'Deductions (GHS)', 'Pay due before tax (GHS)', 'Adjustment note',
   'Branches worked', ...categories.map((c) => `${c} (GHS)`), 'Value with no rate set (GHS)',
 ]));
 
-for (const row of r.rows) {
+for (const row of A.rows) {
   out.push(line([
     row.name,
     row.treatments,
     row.serviceValue.toFixed(2),
     row.commission.toFixed(2),
+    row.topUp ? row.topUp.toFixed(2) : '',
+    row.deduction ? row.deduction.toFixed(2) : '',
+    row.payDue.toFixed(2),
+    row.adjustmentNote || '',
     Object.keys(row.byBranch).join(' / '),
     ...categories.map((c) => (row.byCategory[c] ? row.byCategory[c].value.toFixed(2) : '')),
     row.unratedValue ? row.unratedValue.toFixed(2) : '',
@@ -75,7 +102,8 @@ for (const row of r.rows) {
 }
 
 out.push([]);
-out.push(line(['TOTAL', r.totals.treatments, r.totals.serviceValue.toFixed(2), r.totals.commission.toFixed(2)]));
+out.push(line(['TOTAL', r.totals.treatments, r.totals.serviceValue.toFixed(2), r.totals.commission.toFixed(2),
+  A.totals.topUp.toFixed(2), A.totals.deduction.toFixed(2), A.totals.payDue.toFixed(2)]));
 
 // Everything that makes the number checkable rather than just plausible. These
 // belong in the file itself — a caveat that lives only in a chat message is a
@@ -97,6 +125,18 @@ if (r.missingRates.length) {
   for (const mr of r.missingRates) out.push(line(['  needs a rate', mr.who, `${mr.treatments} treatment(s)`]));
 } else {
   out.push(line(['Every treatment had a commission rate', 'OK']));
+}
+// Say which it was. "No adjustments" and "the sheet was never filled in" look identical in
+// the table, and only one of them is fine.
+out.push(line(adj.exists
+  ? ['Top-ups and deductions', `${adj.entries.size} entr${adj.entries.size === 1 ? 'y' : 'ies'} read from payroll-adjustments-${month}.csv`]
+  : ['Top-ups and deductions', `NONE — no payroll-adjustments-${month}.csv was found. If anyone has one this month, fill in the sheet and run again.`]));
+for (const n of A.negative) {
+  out.push(line(['  NEGATIVE PAY', n.name, `deductions exceed commission + top-up by GHS ${(-n.payDue).toFixed(2)} — check before paying`]));
+}
+if (A.leavers.length) {
+  out.push(line(['  ADJUSTMENTS FOR STAFF WHO HAVE LEFT — not in the total, decide before paying']));
+  for (const l of A.leavers) out.push(line(['', l.name, `left ${l.leftOn || '(date not given)'}`, `top-up ${l.topUp.toFixed(2)}`, `deduction ${l.deduction.toFixed(2)}`, l.note]));
 }
 if (r.unpricedTreatments) {
   out.push(line(['Treatments whose service has no price in the menu', r.unpricedTreatments,
@@ -202,6 +242,8 @@ if (process.argv.includes('--stdout')) {
   writeFileSync(file, csv);
   console.log(`Wrote ${file}`);
   console.log(`${r.totals.people} therapists, ${r.totals.treatments} treatments, GHS ${r.totals.serviceValue.toLocaleString()} of work, GHS ${r.totals.commission.toLocaleString()} commission.`);
+  console.log(adj.exists ? `Adjustments: ${adj.entries.size} entr${adj.entries.size === 1 ? 'y' : 'ies'}, top-ups GHS ${A.totals.topUp.toLocaleString()}, deductions GHS ${A.totals.deduction.toLocaleString()}, pay due before tax GHS ${A.totals.payDue.toLocaleString()}.` : `No adjustments sheet for ${month} — pay due = commission.`);
+  if (A.negative.length) console.log(`WARNING: ${A.negative.length} person(s) with deductions larger than their pay — see the file.`);
   if (r.totals.unratedValue) console.log(`WARNING: GHS ${r.totals.unratedValue.toLocaleString()} of work has no commission rate — not ready to pay from.`);
   if (r.unmatchedStaff.length) console.log(`WARNING: ${r.unmatchedStaff.length} therapist(s) not on the confirmed staff list — see the file.`);
   if (r.possibleSamePerson?.length) console.log(`WARNING: names that may be the same therapist twice — see "POSSIBLY THE SAME PERSON" in the file.`);
