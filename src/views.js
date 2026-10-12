@@ -903,7 +903,7 @@ export function renderGiftRedeemManual(c) {
         <input type="hidden" name="code" value="${ss.code}">
         <button class="btn" type="submit">Use this card for my booking</button>
       </form>
-      <div class="note">This is one of our earlier gift cards, which our team applies for you by hand rather than automatically. We'll hold your appointment straight away and the salon will apply the card and confirm — there's nothing else for you to do.</div>
+      <div class="note">${ss.extended ? 'Your card has been extended, so our team applies it for you by hand rather than automatically.' : 'This is one of our earlier gift cards, which our team applies for you by hand rather than automatically.'} We'll hold your appointment straight away and the salon will apply the card and confirm — there's nothing else for you to do.</div>
     </div>`);
 }
 
