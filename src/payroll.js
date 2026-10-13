@@ -81,6 +81,11 @@ export function loadStaffMap(file = STAFF_MAP_FILE) {
       // remember to set both, and forgetting the flag would pay a leaver.
       former: !!p.former || !!p.leftOn,
       leftOn: p.leftOn || null,
+      // For PAYE. null means NOT ENTERED, which the report says out loud — it is not the
+      // same as 0 (commission only) or false (not registered with SSNIT).
+      position: p.position || '',
+      basicSalary: p.basicSalary == null ? null : Number(p.basicSalary),
+      ssnit: p.ssnit == null ? null : !!p.ssnit,
     };
     byName.set(normName(p.name), person);
     for (const a of p.aliases || []) byName.set(normName(a), person);

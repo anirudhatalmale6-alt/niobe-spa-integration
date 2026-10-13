@@ -20,6 +20,7 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { runPayroll, loadStaffMap } from '../src/payroll.js';
 import { adjustmentsTemplate, loadAdjustments, applyAdjustments } from '../src/adjustments.js';
+import { buildPay } from '../src/payslip.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -63,6 +64,8 @@ if (adj.errors.length) {
 
 const r = await runPayroll({ start, end, staffMap });
 const A = applyAdjustments(r.rows, adj.entries);
+const PAY = buildPay(A.rows, staffMap, month);
+const money2 = (x) => (x == null ? 'n/a' : x.toFixed(2));
 
 // Categories actually worked this month, busiest first, so the columns are stable
 // across the sheet and a therapist's split is readable at a glance.
@@ -80,20 +83,26 @@ out.push(line([`Counts`, `treatments completed and paid only`]));
 out.push([]);
 
 out.push(line([
-  'Therapist', 'Treatments', 'Service value (GHS)', 'Commission (GHS)',
-  'Top-up (GHS)', 'Deductions (GHS)', 'Pay due before tax (GHS)', 'Adjustment note',
+  'Staff member', 'Position', 'Treatments', 'Service value (GHS)', 'Commission (GHS)',
+  'Basic salary (GHS)', 'Top-up (GHS)', 'Gross pay (GHS)', 'SSNIT 5.5% (GHS)', 'PAYE (GHS)',
+  'Deductions (GHS)', 'Net pay (GHS)', 'Adjustment note',
   'Branches worked', ...categories.map((c) => `${c} (GHS)`), 'Value with no rate set (GHS)',
 ]));
 
-for (const row of A.rows) {
+for (const row of PAY.rows) {
   out.push(line([
     row.name,
+    row.position,
     row.treatments,
     row.serviceValue.toFixed(2),
     row.commission.toFixed(2),
+    row.basic ? row.basic.toFixed(2) : '',
     row.topUp ? row.topUp.toFixed(2) : '',
+    row.gross.toFixed(2),
+    money2(row.ssnitAmt),
+    money2(row.paye),
     row.deduction ? row.deduction.toFixed(2) : '',
-    row.payDue.toFixed(2),
+    money2(row.net),
     row.adjustmentNote || '',
     Object.keys(row.byBranch).join(' / '),
     ...categories.map((c) => (row.byCategory[c] ? row.byCategory[c].value.toFixed(2) : '')),
@@ -102,8 +111,10 @@ for (const row of A.rows) {
 }
 
 out.push([]);
-out.push(line(['TOTAL', r.totals.treatments, r.totals.serviceValue.toFixed(2), r.totals.commission.toFixed(2),
-  A.totals.topUp.toFixed(2), A.totals.deduction.toFixed(2), A.totals.payDue.toFixed(2)]));
+out.push(line(['TOTAL', '', r.totals.treatments, r.totals.serviceValue.toFixed(2), r.totals.commission.toFixed(2),
+  PAY.totals.basic.toFixed(2), A.totals.topUp.toFixed(2), PAY.totals.gross.toFixed(2),
+  PAY.table ? PAY.totals.ssnit.toFixed(2) : 'n/a', PAY.table ? PAY.totals.paye.toFixed(2) : 'n/a',
+  A.totals.deduction.toFixed(2), money2(PAY.totals.net)]));
 
 // Everything that makes the number checkable rather than just plausible. These
 // belong in the file itself — a caveat that lives only in a chat message is a
@@ -131,8 +142,22 @@ if (r.missingRates.length) {
 out.push(line(adj.exists
   ? ['Top-ups and deductions', `${adj.entries.size} entr${adj.entries.size === 1 ? 'y' : 'ies'} read from payroll-adjustments-${month}.csv`]
   : ['Top-ups and deductions', `NONE — no payroll-adjustments-${month}.csv was found. If anyone has one this month, fill in the sheet and run again.`]));
-for (const n of A.negative) {
-  out.push(line(['  NEGATIVE PAY', n.name, `deductions exceed commission + top-up by GHS ${(-n.payDue).toFixed(2)} — check before paying`]));
+for (const n of PAY.rows.filter((x) => x.net != null && x.net < 0)) {
+  out.push(line(['  NEGATIVE PAY', n.name, `deductions exceed pay after tax by GHS ${(-n.net).toFixed(2)} — check before paying`]));
+}
+// Tax. Every assumption is printed here, where the accountant will read it, not left in a chat.
+if (PAY.table) {
+  out.push(line(['PAYE', `GRA resident bands in force from ${PAY.table.from} (${PAY.table.source})`,
+    'gross = basic + commission + top-up; SSNIT 5.5% of BASIC for registered staff comes off first; deductions come off AFTER tax',
+    'please have your accountant confirm before paying']));
+} else {
+  out.push(line(['PAYE', 'NOT WORKED OUT — no verified GRA table for this month, so SSNIT, PAYE and net pay show n/a']));
+}
+if (PAY.notes.noSalaryEntered.length) {
+  out.push(line(['  basic salary not entered — treated as commission only', PAY.notes.noSalaryEntered.join(' / ')]));
+}
+if (PAY.notes.noSsnitStatus.length) {
+  out.push(line(['  SSNIT status not entered — no SSNIT deducted', PAY.notes.noSsnitStatus.join(' / ')]));
 }
 if (A.leavers.length) {
   out.push(line(['  ADJUSTMENTS FOR STAFF WHO HAVE LEFT — not in the total, decide before paying']));
@@ -242,8 +267,9 @@ if (process.argv.includes('--stdout')) {
   writeFileSync(file, csv);
   console.log(`Wrote ${file}`);
   console.log(`${r.totals.people} therapists, ${r.totals.treatments} treatments, GHS ${r.totals.serviceValue.toLocaleString()} of work, GHS ${r.totals.commission.toLocaleString()} commission.`);
-  console.log(adj.exists ? `Adjustments: ${adj.entries.size} entr${adj.entries.size === 1 ? 'y' : 'ies'}, top-ups GHS ${A.totals.topUp.toLocaleString()}, deductions GHS ${A.totals.deduction.toLocaleString()}, pay due before tax GHS ${A.totals.payDue.toLocaleString()}.` : `No adjustments sheet for ${month} — pay due = commission.`);
-  if (A.negative.length) console.log(`WARNING: ${A.negative.length} person(s) with deductions larger than their pay — see the file.`);
+  console.log(adj.exists ? `Adjustments: ${adj.entries.size} entr${adj.entries.size === 1 ? 'y' : 'ies'}, top-ups GHS ${A.totals.topUp.toLocaleString()}, deductions GHS ${A.totals.deduction.toLocaleString()}.` : `No adjustments sheet for ${month}.`);
+  console.log(PAY.table ? `Gross GHS ${PAY.totals.gross.toLocaleString()} · SSNIT GHS ${PAY.totals.ssnit.toLocaleString()} · PAYE GHS ${PAY.totals.paye.toLocaleString()} · net GHS ${PAY.totals.net.toLocaleString()} (${PAY.rows.length} people).` : 'PAYE not worked out: no verified GRA table for this month.');
+  if (PAY.rows.some((x) => x.net != null && x.net < 0)) console.log('WARNING: someone has deductions larger than their pay after tax — see the file.');
   if (r.totals.unratedValue) console.log(`WARNING: GHS ${r.totals.unratedValue.toLocaleString()} of work has no commission rate — not ready to pay from.`);
   if (r.unmatchedStaff.length) console.log(`WARNING: ${r.unmatchedStaff.length} therapist(s) not on the confirmed staff list — see the file.`);
   if (r.possibleSamePerson?.length) console.log(`WARNING: names that may be the same therapist twice — see "POSSIBLY THE SAME PERSON" in the file.`);

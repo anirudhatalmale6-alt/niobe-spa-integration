@@ -180,8 +180,15 @@ the run with every problem listed (exit 2) — a skipped deduction would look ex
 correct payroll. No sheet is fine, and the CHECKS section says which it was. Like the staff
 map, these files are gitignored (names and pay).
 
-PAYE (`src/paye.js`, GRA 2026 bands from 1 Sep 2026) is built and tested but not yet in the
-report — it needs each person's basic salary and whether they are an employee or casual.
+**PAYE and net pay** (`src/paye.js` + `src/payslip.js`, GRA bands from 1 Sep 2026). Niobe's
+therapists are employees on commission only; salaried staff (reception, managers) are added to
+the staff sheet with a basic salary and get a row even with no treatments. Per person:
+gross = basic + commission + top-up; SSNIT 5.5% of BASIC comes off for those marked
+registered; PAYE on the rest; deductions come off AFTER tax. A month before the verified table
+shows n/a, never a tax-free net. The staff sheet (`staff-map-csv.mjs`) carries Position, Basic
+salary and SSNIT columns; a BLANK salary or SSNIT status is listed by name in CHECKS (blank is
+"not entered", not 0 / No). SimpleSpa's staff.php has no salary, position or SSNIT field
+(checked 13 Oct 2026: id, names, email, phone, hours only), so these come from Niobe.
 
 **It depends on `data/staff-map.json`, which is NOT in this repo and never should be.**
 It holds 36 employees' names and commission rates; the repo is public. It is also the

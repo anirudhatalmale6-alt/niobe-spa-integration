@@ -12,7 +12,7 @@ import { readFileSync, existsSync } from 'fs';
 import { parseCsv, csvRow, csvFile } from './csv.js';
 import { normName } from './payroll.js';
 
-export const HEAD = ['Therapist', 'Top-up (GHS)', 'Deductions (GHS)', 'Note'];
+export const HEAD = ['Staff member', 'Top-up (GHS)', 'Deductions (GHS)', 'Note'];
 
 const money = (x) => Math.round(x * 100) / 100;
 
@@ -54,8 +54,8 @@ export function parseAdjustments(text, staffMap) {
   const rows = parseCsv(text);
   const errors = [];
   const entries = new Map();
-  const h = rows.findIndex((r) => normName(r[0]) === 'therapist');
-  if (h < 0) return { entries, errors: ['No "Therapist" header row — is this the adjustments sheet?'] };
+  const h = rows.findIndex((r) => ['therapist', 'staff member'].includes(normName(r[0])));
+  if (h < 0) return { entries, errors: ['No "Staff member" header row — is this the adjustments sheet?'] };
   const col = (label) => rows[h].findIndex((c) => normName(c).startsWith(normName(label)));
   const iTop = col('Top-up'), iDed = col('Deductions'), iNote = col('Note');
   if (iTop < 0 || iDed < 0) return { entries, errors: ['The sheet needs both a "Top-up" and a "Deductions" column.'] };

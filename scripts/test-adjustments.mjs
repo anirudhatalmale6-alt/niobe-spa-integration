@@ -21,11 +21,14 @@ const staff = loadStaffMap(mapFile);
 
 const tpl = adjustmentsTemplate(staff, '2026-10');
 const tplRows = parseCsv(tpl);
-ok(tplRows.some((r) => r[0] === 'Therapist') && ['Ama Serwaa Mensah', 'Esi Owusu', 'Priscilla Enyonam Zekpe'].every((n) => tplRows.some((r) => r[0] === n)), 'the blank sheet lists every current therapist');
+ok(tplRows.some((r) => r[0] === 'Staff member') && ['Ama Serwaa Mensah', 'Esi Owusu', 'Priscilla Enyonam Zekpe'].every((n) => tplRows.some((r) => r[0] === n)), 'the blank sheet lists every current therapist');
 ok(!tplRows.some((r) => r[0] === 'Yaa Boateng'), 'and leaves out someone who has left');
 ok(parseAdjustments(tpl, staff).errors.length === 0 && parseAdjustments(tpl, staff).entries.size === 0, 'an untouched blank sheet reads as "no adjustments", not as errors');
 
 const sheet = (lines) => ['Therapist,Top-up (GHS),Deductions (GHS),Note', ...lines].join('\r\n');
+// The October sheet already sent to Niobe says "Therapist" — it must still read.
+const oldSheet = parseAdjustments(['Therapist,Top-up (GHS),Deductions (GHS),Note', 'Esi Owusu,75,,old heading'].join('\r\n'), staff);
+ok(oldSheet.errors.length === 0 && oldSheet.entries.get('Esi Owusu')?.topUp === 75, 'a sheet with the old "Therapist" heading (already sent out) still reads');
 let r = parseAdjustments(sheet([
   'Ama Serwaa Mensah,200,,Bonus for September',
   'priscella zekpe,,"1,000.00",Advance repayment',

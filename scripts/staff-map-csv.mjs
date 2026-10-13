@@ -44,7 +44,10 @@ const esc = (v) => {
 // inside quotes, and splitting on commas would tear it apart into fragments that each look
 // like a real column. Excel writes quotes correctly; the reader has to honour them.
 
-const HEAD = ['Therapist', 'Commission %', 'Still employed?', 'Left on (YYYY-MM-DD)',
+// Position / basic salary / SSNIT added for PAYE (Oct 2026). Salaried staff with no
+// treatments (reception, managers) belong on this sheet too — the payroll gives them a row.
+const HEAD = ['Staff member', 'Position', 'Commission %', 'Basic salary (GHS per month)',
+  'SSNIT registered? (Yes/No)', 'Still employed?', 'Left on (YYYY-MM-DD)',
   'Other spellings seen (comma separated)', 'Currently in SimpleSpa as', 'Branches'];
 
 // --- live names, so the sheet reflects reality rather than the map's memory of it ---
@@ -98,7 +101,10 @@ if (has('--export') || !argv.length) {
     const branches = [...new Set(hits.flatMap((h) => [...h.branches]))];
     out.push([
       p.name,
+      p.position || '',
       p.commissionPct ?? '',
+      p.basicSalary ?? '',
+      p.ssnit == null ? '' : (p.ssnit ? 'Yes' : 'No'),
       p.former ? 'No' : 'Yes',
       p.leftOn || '',
       (p.aliases || []).join(', '),
@@ -121,14 +127,14 @@ if (has('--export') || !argv.length) {
     out.push('');
     out.push(esc('NEW — in SimpleSpa but not on the payroll. Fill in a name and a commission % for anyone real.'));
     for (const [, v] of missing.sort((a, b) => a[1].display.localeCompare(b[1].display))) {
-      out.push(['', '', '', '', '', v.display, [...v.branches].join(', ')].map(esc).join(','));
+      out.push(['', '', '', '', '', '', '', '', v.display, [...v.branches].join(', ')].map(esc).join(','));
     }
   }
   if (ignored.length) {
     out.push('');
     out.push(esc('IGNORED ON PURPOSE — house and front-desk logins, not people. Nothing to do; listed so you can see they were not forgotten.'));
     for (const [, v] of ignored.sort((a, b) => a[1].display.localeCompare(b[1].display))) {
-      out.push(['', '', '', '', '', v.display, [...v.branches].join(', ')].map(esc).join(','));
+      out.push(['', '', '', '', '', '', '', '', v.display, [...v.branches].join(', ')].map(esc).join(','));
     }
   }
 
@@ -149,9 +155,12 @@ if (has('--import')) {
 
   const head = rows[0].map((h) => norm(h));
   const col = (want) => head.findIndex((h) => h.startsWith(norm(want)));
-  const iName = col('therapist'), iPct = col('commission'), iEmp = col('still employed'),
-    iLeft = col('left on'), iAlias = col('other spellings');
-  if (iName < 0) { console.error('No "Therapist" column — is this the exported sheet?'); process.exit(1); }
+  // "Therapist" was the first column's name until salaried staff joined the sheet.
+  const iName = [col('staff member'), col('therapist')].find((i) => i >= 0) ?? -1;
+  const iPct = col('commission'), iEmp = col('still employed'),
+    iLeft = col('left on'), iAlias = col('other spellings'),
+    iPos = col('position'), iSal = col('basic salary'), iSsnit = col('ssnit');
+  if (iName < 0) { console.error('No "Staff member" column — is this the exported sheet?'); process.exit(1); }
 
   const errors = [], warnings = [], people = [];
   for (let r = 1; r < rows.length; r++) {
@@ -187,7 +196,27 @@ if (has('--import')) {
     }
 
     const aliases = String(row[iAlias] || '').split(',').map(norm).filter(Boolean);
-    people.push({ name, commissionPct: pct, aliases, former, leftOn: leftOn || null, row: r + 1 });
+
+    // Blank is "not entered", which the payroll reports by name — not the same as 0.
+    const salRaw = iSal >= 0 ? String(row[iSal] ?? '').trim().replace(/^GHS\s*/i, '').replace(/,/g, '') : '';
+    let basicSalary = null;
+    if (salRaw !== '') {
+      basicSalary = Number(salRaw);
+      if (!/^\d+(\.\d{1,2})?$/.test(salRaw)) errors.push(`Row ${r + 1} (${name}): basic salary "${row[iSal]}" is not an amount (numbers only, 0 for commission only).`);
+    }
+    const ssRaw = iSsnit >= 0 ? norm(row[iSsnit] ?? '') : '';
+    let ssnit = null;
+    if (ssRaw !== '') {
+      if (['yes', 'y', 'true', 'registered'].includes(ssRaw)) ssnit = true;
+      // Still enrolling = not yet deducting. Saying "no" for them is correct for the payslip.
+      else if (['no', 'n', 'false', 'pending', 'enrolling', 'in process', 'not yet'].includes(ssRaw)) ssnit = false;
+      else errors.push(`Row ${r + 1} (${name}): SSNIT "${row[iSsnit]}" should be Yes or No.`);
+    }
+    const position = iPos >= 0 ? String(row[iPos] || '').trim() : '';
+    if (pct == null && !basicSalary && !former) {
+      warnings.push(`Row ${r + 1} (${name}): no commission % and no basic salary — nothing to pay them from.`);
+    }
+    people.push({ name, commissionPct: pct, aliases, former, leftOn: leftOn || null, position, basicSalary, ssnit, row: r + 1 });
   }
 
   if (!people.length) errors.push('No therapists found in that file.');
@@ -219,11 +248,18 @@ if (has('--import')) {
   }
 
   const existing = existsSync(JSON_FILE) ? JSON.parse(readFileSync(JSON_FILE, 'utf8')) : {};
+  // Keep what the sheet does not show. Settings like per-treatment rates live only in the
+  // JSON; rebuilding each person from the sheet's columns alone would silently drop them.
+  const before = new Map((existing.people || []).map((p) => [norm(p.name), p]));
   const next = {
     ...existing,
     people: people.map((p) => ({
+      ...(() => { const o = { ...(before.get(norm(p.name)) || {}) }; for (const k of ['name', 'aliases', 'commissionPct', 'former', 'leftOn', 'position', 'basicSalary', 'ssnit']) delete o[k]; return o; })(),
       name: p.name,
       aliases: p.aliases,
+      ...(p.position ? { position: p.position } : {}),
+      ...(p.basicSalary == null ? {} : { basicSalary: p.basicSalary }),
+      ...(p.ssnit == null ? {} : { ssnit: p.ssnit }),
       ...(p.commissionPct == null ? {} : { commissionPct: p.commissionPct }),
       ...(p.former ? { former: true } : {}),
       ...(p.leftOn ? { leftOn: p.leftOn } : {}),
