@@ -125,7 +125,7 @@ if (has('--export') || !argv.length) {
 
   if (missing.length) {
     out.push('');
-    out.push(esc('NEW — in SimpleSpa but not on the payroll. Fill in a name and a commission % for anyone real.'));
+    out.push(esc('NEW — in SimpleSpa but not on the payroll. For anyone real, fill in their name in the first column, plus a commission % and/or basic salary.'));
     for (const [, v] of missing.sort((a, b) => a[1].display.localeCompare(b[1].display))) {
       out.push(['', '', '', '', '', '', '', '', v.display, [...v.branches].join(', ')].map(esc).join(','));
     }
@@ -137,6 +137,11 @@ if (has('--export') || !argv.length) {
       out.push(['', '', '', '', '', '', '', '', v.display, [...v.branches].join(', ')].map(esc).join(','));
     }
   }
+
+  // Salaried staff who never take a booking (reception, managers) are not in SimpleSpa's
+  // appointments and may not be in its staff list either. Say where they go.
+  out.push('');
+  out.push(esc('SALARIED STAFF NOT IN SIMPLESPA (reception, managers, cleaners…) — add a row for each anywhere above the NEW block: name, position, basic salary, SSNIT Yes/No.'));
 
   mkdirSync(join(ROOT, 'data'), { recursive: true });
   writeFileSync(CSV_FILE, '﻿' + out.join('\r\n') + '\r\n');
@@ -170,7 +175,7 @@ if (has('--import')) {
     // it is correct — those are suggestions, and a suggestion must not become a payee just
     // because it was in the file.
     if (!name) continue;
-    if (/^(NEW —|NEW -|IGNORED ON PURPOSE|NOT ON THE LIST)/i.test(name)) continue;
+    if (/^(NEW —|NEW -|IGNORED ON PURPOSE|NOT ON THE LIST|SALARIED STAFF NOT IN SIMPLESPA)/i.test(name)) continue;
 
     const pctRaw = String(row[iPct] ?? '').trim();
     let pct = null;
