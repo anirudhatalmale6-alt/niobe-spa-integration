@@ -260,3 +260,40 @@ answer. Read the `CHECKS` block at the bottom of the CSV before paying from it.
 ```bash
 cd /opt/niobe-integration && git pull --ff-only && systemctl restart niobe-pay
 ```
+
+
+## Going live with the gift card system (`main` → droplet)
+
+The droplet runs `abbbaa2` (the extended-card hotfix on top of `3d0f235`). `main` adds the own
+gift card system, the staff card desk, the all-branch search, the 1 December policy and payroll.
+
+1. **Staff page logins.** `/desk/cards` and `/desk/search` are for EVERY front desk, but the
+   catch-all `location /desk/` accepts only the central login, and each branch has its own.
+   Build the shared file, then add these two blocks ABOVE `location /desk/ {` in
+   `/etc/nginx/sites-enabled/niobe` (live copy: `deploy/nginx-niobe.live.conf`):
+
+   ```sh
+   sh deploy/desk-shared-logins.sh      # writes /etc/nginx/.niobe_desk_all; re-run after any password change
+   ```
+   ```nginx
+   location /desk/cards {
+       auth_basic "Niobe staff";
+       auth_basic_user_file /etc/nginx/.niobe_desk_all;
+       proxy_pass http://127.0.0.1:8080;
+       proxy_set_header Host $host;
+       proxy_set_header X-Real-IP $remote_addr;
+       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+       proxy_set_header X-Forwarded-Proto $scheme;
+   }
+   location /desk/search { ...same as above... }
+   ```
+   `/desk/giftcard-sweep` (customer names and balances) is deliberately NOT added — it stays on
+   the central login via `location /desk/`.
+2. `nginx -t && systemctl reload nginx`, then prove it: each branch login gets 200 on
+   `/desk/cards` and `/desk/search`, no login gets 401, a branch login gets 401 on
+   `/desk/giftcard-sweep`.
+3. `.env`: nothing new is required — `GIFTCARD_ISSUER` defaults to `giftup` (customers see no
+   change), the card sweep defaults to report-only. Switching to Niobe's own cards is a separate
+   step: `GIFTCARD_ISSUER=niobe`, on the client's word after his team has tested.
+4. `git fetch && git merge --ff-only origin/main && systemctl restart niobe-pay`, check
+   `/api/health`. Rollback: `git reset --hard abbbaa2 && systemctl restart niobe-pay`.
