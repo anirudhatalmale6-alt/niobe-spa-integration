@@ -70,7 +70,7 @@ function isClientBooking(appt) {
   return !!(appt.client && appt.client.mobile);
 }
 
-const DATA_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
+const DATA_DIR = process.env.NIOBE_DATA_DIR || join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
 function auditRelease(entry) {
   try {
     mkdirSync(DATA_DIR, { recursive: true });
@@ -152,11 +152,18 @@ export function listHolds() { return [...holds.entries()].map(([id, h]) => ({ ap
 const ymd = (d) => d.toISOString().slice(0, 10);
 
 // Pull a branch's current New/Rebooked appointments over a sensible window
-// (yesterday for TZ safety → ~7 days out; a stale hold is always near-term).
+// (yesterday for TZ safety → HOLDS_LOOKAHEAD_DAYS out).
+//
+// This was 7 days, and that was a real bug (found 22 Oct 2026): a booking made more than a week
+// ahead was never seen while it was new, so it never got its deposit link — and when it later
+// drifted into the 7-day window it was already "old", so it never got one at all, and was then
+// cancelled for not paying a deposit nobody had asked for. 39 bookings in three weeks. The window
+// now covers how far ahead people actually book, and assess() refuses to release anything we
+// have not asked.
 async function fetchOpenHolds(branch) {
   const now = Date.now();
   const start = ymd(new Date(now - 86400000));
-  const end = ymd(new Date(now + 7 * 86400000));
+  const end = ymd(new Date(now + Number(process.env.HOLDS_LOOKAHEAD_DAYS || 90) * 86400000));
   const all = [];
   for (let page = 1; page <= 6; page++) {
     const res = await ssPost(branch, 'appointments.php', { start, end, page, per_page: 1000 });
@@ -215,7 +222,7 @@ function duplicateMap(open) {
 }
 
 // Decide the fate of one open hold as of `now`.
-function assess(branch, appt, now) {
+export function assess(branch, appt, now) {
   const createdAt = new Date(String(appt.created_at || appt.start).replace(' ', 'T') + 'Z');
   const tracked = holds.has(appt.appointment_id);
 
@@ -240,8 +247,15 @@ function assess(branch, appt, now) {
     ? { staffAuth: holds.get(appt.appointment_id)?.staffAuth || false, graceMinutes: CONFIG.releaseGraceMinutes }
     : { staffAuth: true, graceMinutes: CONFIG.releaseUntrackedGraceMinutes };
 
-  const deadline = releaseDeadline(createdAt, branch, opts);
-  const due = isReleasable(createdAt, branch, now, opts);
+  // NO REQUEST, NO RELEASE. An untracked booking's clock starts when we actually ASKED the
+  // client to pay — the first deposit request that reached a provider — never when it was
+  // booked. Until then it waits, and maybeNotify() asks. (A tracked hold came through our own
+  // payment page, so the client has seen the ask; its tight timer is unchanged.)
+  const askedAtMs = askedStamps.get(appt.appointment_id);
+  if (!tracked && !askedAtMs) return { action: 'wait', reason: 'not_yet_asked', deadline: null, tracked };
+  const base = tracked ? createdAt : new Date(Math.max(createdAt.getTime(), askedAtMs));
+  const deadline = releaseDeadline(base, branch, opts);
+  const due = isReleasable(base, branch, now, opts);
 
   // Scope guard: in 'tracked' mode we only ever release holds our funnel saw.
   const inScope = CONFIG.releaseScope === 'all' || tracked;
@@ -319,10 +333,18 @@ async function doRelease(branch, appt, deadline) {
 // The client pays for each SMS and the customer just sees spam, so the record of
 // "already told them" is now on disk, same as the hold registry.
 const NOTIFIED_FILE = join(DATA_DIR, 'notified.json');
-const NOTIFY_RETENTION_MS = 30 * 86400000;
+// Must outlast the lookahead: a booking 90 days out that was asked on day 1 must still be
+// remembered as asked on day 89, or it is texted again and its deadline restarts.
+const NOTIFY_RETENTION_MS = 120 * 86400000;
 const notifiedIds = new Set();
 const remindedIds = new Set();
 const notifyStamps = new Map(); // id -> ms, so old entries can be aged out
+// When the client was first ASKED (a request a provider accepted). Separate from notifyStamps,
+// which a reminder overwrites — the release clock must not move because we reminded someone.
+const askedStamps = new Map();
+// Sends that reached no provider at all, per booking, so a dead number is not retried forever.
+const failedAsks = new Map();
+const MAX_ASK_ATTEMPTS = 3;
 
 function saveNotified() {
   try {
@@ -331,6 +353,7 @@ function saveNotified() {
       notified: [...notifiedIds],
       reminded: [...remindedIds],
       stamps: Object.fromEntries(notifyStamps),
+      asked: Object.fromEntries(askedStamps),
     }));
   } catch { /* persistence must never break the sweep */ }
 }
@@ -343,6 +366,10 @@ function loadNotified() {
     const keep = (id) => !stamps[id] || stamps[id] >= cutoff;
     for (const id of raw?.notified || []) if (keep(id)) { notifiedIds.add(id); notifyStamps.set(id, stamps[id] || Date.now()); }
     for (const id of raw?.reminded || []) if (keep(id)) { remindedIds.add(id); notifyStamps.set(id, stamps[id] || Date.now()); }
+    // Bookings asked before askedStamps existed: their stamp is the best record we have. It may
+    // be a reminder's (later than the first ask), which only ever makes the deadline LATER.
+    const asked = raw?.asked || {};
+    for (const id of notifiedIds) askedStamps.set(id, asked[id] || notifyStamps.get(id));
   } catch { /* no file yet, or unreadable — start empty */ }
 }
 
@@ -357,12 +384,14 @@ loadNotified();
 
 // Pure decision: given a hold, its assessment, and what we've already sent, what
 // should we send now? Returns { first, reminder } booleans. Exported for testing.
+// `fresh` is kept for the callers/tests that pass it, but no longer gates the first request:
+// gating on "booked in the last 3 hours" is exactly what left advance bookings un-asked.
 export function notifyPlan(appt, a, now, { fresh, notified, reminded, reminderLeadMs }) {
   const id = appt.appointment_id;
   const hasContact = !!(appt.client?.email || appt.client?.mobile);
   if (!hasContact) return { first: false, reminder: false };
   // First deposit-link send: a fresh, still-open, unsecured hold we've not emailed.
-  const first = fresh && !notified.has(id) && (a.action === 'wait' || a.action === 'release');
+  const first = !notified.has(id) && (a.action === 'wait' || a.action === 'release');
   // Reminder: within grace, deadline approaching, not yet reminded.
   const reminder = a.action === 'wait' && !!a.deadline && !reminded.has(id)
     && (a.deadline.getTime() - now.getTime()) <= reminderLeadMs;
@@ -392,16 +421,31 @@ async function maybeNotify(branch, appt, a, now) {
   const id = appt.appointment_id;
 
   if (plan.first) {
+    // Only a request that reached a provider counts as asking — the result of each send is
+    // now read instead of ignored. Neither got through: not asked, try again next sweep, up
+    // to MAX_ASK_ATTEMPTS, then leave it for the desk. It is never released either way.
+    const r1 = email ? await sendDepositEmail({ to: email, name: appt.client?.first_name, service: appt.service?.service_name, datetime: fmtWhen(appt.start), ...common }) : null;
+    const r2 = phone ? await sendDepositSMS({ to: phone, ...common }) : null;
+    const emailOk = !!r1?.ok, smsOk = !!r2?.ok;
+    if (!emailOk && !smsOk) {
+      const n = (failedAsks.get(id) || 0) + 1;
+      failedAsks.set(id, n);
+      if (n >= MAX_ASK_ATTEMPTS) markNotified(notifiedIds, id); // stop retrying; askedStamps stays EMPTY so it is never released
+      console.log(`[notify] deposit request NOT delivered (attempt ${n}) ${branch.id} ${id}: email ${r1?.error || r1?.skipped || 'none'} | sms ${r2?.error || r2?.skipped || 'none'}`);
+      auditRelease({ at: new Date().toISOString(), action: 'notify_failed', branchId: branch.id, appointment_id: id, attempt: n, emailError: r1?.error || null, smsError: r2?.error || null });
+      return;
+    }
+    failedAsks.delete(id);
+    if (!askedStamps.has(id)) askedStamps.set(id, Date.now());
     markNotified(notifiedIds, id);
-    if (email) await sendDepositEmail({ to: email, name: appt.client?.first_name, service: appt.service?.service_name, datetime: fmtWhen(appt.start), ...common });
-    if (phone) await sendDepositSMS({ to: phone, ...common });
-    auditRelease({ at: new Date().toISOString(), action: 'notify_deposit_link', branchId: branch.id, appointment_id: id, email: !!email, sms: !!phone });
+    auditRelease({ at: new Date().toISOString(), action: 'notify_deposit_link', branchId: branch.id, appointment_id: id, email: !!email, sms: !!phone, emailOk, smsOk });
   }
   if (plan.reminder) {
     markNotified(remindedIds, id);
-    if (email) await sendDepositEmail({ to: email, name: appt.client?.first_name, service: appt.service?.service_name, datetime: fmtWhen(appt.start), ...common });
-    if (phone) await sendDepositSMS({ to: phone, ...common });
-    auditRelease({ at: new Date().toISOString(), action: 'notify_reminder', branchId: branch.id, appointment_id: id, email: !!email, sms: !!phone });
+    const r1 = email ? await sendDepositEmail({ to: email, name: appt.client?.first_name, service: appt.service?.service_name, datetime: fmtWhen(appt.start), ...common }) : null;
+    const r2 = phone ? await sendDepositSMS({ to: phone, ...common }) : null;
+    if (!r1?.ok && !r2?.ok) console.log(`[notify] reminder NOT delivered ${branch.id} ${id}: email ${r1?.error || 'none'} | sms ${r2?.error || 'none'}`);
+    auditRelease({ at: new Date().toISOString(), action: 'notify_reminder', branchId: branch.id, appointment_id: id, email: !!email, sms: !!phone, emailOk: !!r1?.ok, smsOk: !!r2?.ok });
   }
 }
 
