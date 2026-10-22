@@ -1,4 +1,35 @@
 import { CONFIG } from './config.js';
+import { readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+// --- "SMS credit has run out" alert ----------------------------------------------------
+// Found 22 Oct 2026: Hubtel had been refusing EVERY deposit text with "Payment required on
+// account" (status 12) for an unknown time, and nothing said so — a refused text looks like a
+// sent one unless somebody reads the answer. The first refusal for lack of credit now emails the
+// central mailbox, at most once a day (remembered on disk, so a restart does not re-send it).
+const DATA_DIR = process.env.NIOBE_DATA_DIR || join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
+const SMS_ALERT_FILE = join(DATA_DIR, 'sms-credit-alert.json');
+const SMS_ALERT_EVERY_MS = 24 * 3600e3;
+export const smsOutOfCredit = (text) => /payment required/i.test(String(text)) || /"status"\s*:\s*12\b/.test(String(text));
+let lastSmsAlertAt = (() => { try { return JSON.parse(readFileSync(SMS_ALERT_FILE, 'utf8')).at || 0; } catch { return 0; } })();
+async function alertSmsCredit(detail) {
+  if (Date.now() - lastSmsAlertAt < SMS_ALERT_EVERY_MS) return { ok: false, skipped: 'already_alerted_today' };
+  lastSmsAlertAt = Date.now();
+  try { mkdirSync(DATA_DIR, { recursive: true }); writeFileSync(SMS_ALERT_FILE, JSON.stringify({ at: lastSmsAlertAt, detail: String(detail).slice(0, 300) })); } catch { /* the alert still goes */ }
+  const to = CONFIG.bookingEmailFallback || CONFIG.notifyEmailFrom;
+  if (!to) { console.log('[notify] SMS credit has run out and there is no inbox configured to tell'); return { ok: false, error: 'no_inbox' }; }
+  console.log('[notify] SMS credit has run out — alerting the central mailbox');
+  return sendEmail({
+    to, internal: true,
+    subject: 'Action needed: Hubtel SMS credit has run out',
+    html: `<div style="font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;color:#2b2320;max-width:520px">
+      <p><strong>Hubtel is refusing text messages because the SMS credit has run out.</strong></p>
+      <p>Deposit links and reminders are still going out by email, but clients are not getting the text.
+      Please log into Hubtel and top up the SMS balance. Texts start again by themselves once it is topped up.</p>
+      <p style="color:#8b7d73;font-size:13px">You will get this at most once a day until it is fixed. Hubtel's reply: ${String(detail).replace(/[<>&]/g, '').slice(0, 200)}</p></div>`,
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Outbound notifications — emails the deposit / "secure your slot" link to a
@@ -116,6 +147,7 @@ export async function sendSMS({ to, content }) {
     const msgId = j.messageId || j.MessageId;
     const okStatus = res.ok && (status === 0 || status === '0' || msgId || j.data);
     if (okStatus) return { ok: true, id: msgId, raw: j };
+    if (smsOutOfCredit(text)) alertSmsCredit(text).catch(() => { /* never break a send over the alert */ });
     return { ok: false, error: `Hubtel SMS ${res.status}: ${text.slice(0, 180)}` };
   } catch (err) {
     return { ok: false, error: err.message };
