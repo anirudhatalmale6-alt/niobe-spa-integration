@@ -442,14 +442,20 @@ async function maybeNotify(branch, appt, a, now) {
     failedAsks.delete(id);
     if (!askedStamps.has(id)) askedStamps.set(id, Date.now());
     markNotified(notifiedIds, id);
-    auditRelease({ at: new Date().toISOString(), action: 'notify_deposit_link', branchId: branch.id, appointment_id: id, email: !!email, sms: !!phone, emailOk, smsOk });
+    // One channel failing is not a failed ask, but it must not be silent either — the reason is
+    // what tells you whether the SMS key, the balance or the sender name has gone wrong.
+    if (phone && !smsOk) console.log(`[notify] SMS not delivered ${branch.id} ${id}: ${r2?.error || r2?.skipped || 'unknown'}`);
+    if (email && !emailOk) console.log(`[notify] email not delivered ${branch.id} ${id}: ${r1?.error || r1?.skipped || 'unknown'}`);
+    auditRelease({ at: new Date().toISOString(), action: 'notify_deposit_link', branchId: branch.id, appointment_id: id, email: !!email, sms: !!phone, emailOk, smsOk,
+      ...(smsOk ? {} : { smsError: (r2?.error || r2?.skipped || null) }), ...(emailOk ? {} : { emailError: (r1?.error || r1?.skipped || null) }) });
   }
   if (plan.reminder) {
     markNotified(remindedIds, id);
     const r1 = email ? await sendDepositEmail({ to: email, name: appt.client?.first_name, service: appt.service?.service_name, datetime: fmtWhen(appt.start), ...common }) : null;
     const r2 = phone ? await sendDepositSMS({ to: phone, ...common }) : null;
     if (!r1?.ok && !r2?.ok) console.log(`[notify] reminder NOT delivered ${branch.id} ${id}: email ${r1?.error || 'none'} | sms ${r2?.error || 'none'}`);
-    auditRelease({ at: new Date().toISOString(), action: 'notify_reminder', branchId: branch.id, appointment_id: id, email: !!email, sms: !!phone, emailOk: !!r1?.ok, smsOk: !!r2?.ok });
+    auditRelease({ at: new Date().toISOString(), action: 'notify_reminder', branchId: branch.id, appointment_id: id, email: !!email, sms: !!phone, emailOk: !!r1?.ok, smsOk: !!r2?.ok,
+      ...(r2 && !r2.ok ? { smsError: r2.error || r2.skipped || null } : {}), ...(r1 && !r1.ok ? { emailError: r1.error || r1.skipped || null } : {}) });
   }
 }
 
