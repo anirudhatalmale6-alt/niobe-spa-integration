@@ -20,7 +20,8 @@ async function alertSmsCredit(detail) {
   const to = CONFIG.bookingEmailFallback || CONFIG.notifyEmailFrom;
   if (!to) { console.log('[notify] SMS credit has run out and there is no inbox configured to tell'); return { ok: false, error: 'no_inbox' }; }
   console.log('[notify] SMS credit has run out — alerting the central mailbox');
-  return sendEmail({
+  // Record the alert's OWN outcome: an alert whose failure is silent is the bug it exists to catch.
+  const r = await sendEmail({
     to, internal: true,
     subject: 'Action needed: Hubtel SMS credit has run out',
     html: `<div style="font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;color:#2b2320;max-width:520px">
@@ -29,6 +30,8 @@ async function alertSmsCredit(detail) {
       Please log into Hubtel and top up the SMS balance. Texts start again by themselves once it is topped up.</p>
       <p style="color:#8b7d73;font-size:13px">You will get this at most once a day until it is fixed. Hubtel's reply: ${String(detail).replace(/[<>&]/g, '').slice(0, 200)}</p></div>`,
   });
+  console.log(r.ok ? '[notify] SMS-credit alert email sent' : `[notify] SMS-credit alert email FAILED: ${r.error || r.skipped || 'unknown'}`);
+  return r;
 }
 
 // ---------------------------------------------------------------------------
