@@ -212,13 +212,16 @@ await test('an unpaid code appears ONLY in the retry box, never as a balance', a
   assert.equal(/GHS\s*400\.00/.test(body), false, 'the reserved face value must never be shown');
 });
 
-await test('an expired card shows the balance AND the extension offer', async () => {
+// Nothing online offers or mentions an extension (client, 22 Oct 2026) — the desk may still help
+// case by case, so the page invites a call instead.
+await test('an expired card shows the balance and invites a call — with NO extension offer', async () => {
   const res = await post('/balance', { code: expiredCard.code });
   assert.equal(res.status, 200);
   const body = await res.text();
   assert.match(body, /passed its expiry date/i);
   assert.match(body, /GHS\s*300\.00/, 'the money is still theirs and must be shown');
-  assert.match(body, /extend this card by 30 days/i);
+  assert.match(body, /give us a call/i);
+  assert.equal(/extend/i.test(body), false, 'the page must not mention extending');
 });
 
 await test('the buyer and recipient names are never disclosed', async () => {

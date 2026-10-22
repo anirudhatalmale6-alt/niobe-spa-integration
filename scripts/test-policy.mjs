@@ -16,9 +16,15 @@ const ymd = (t) => new Date(t).toISOString().slice(0, 10);
 
 if (!process.env.POLICY_PHASE) {
   let failed = 0, total = 0, ok = 0;
-  for (const [phase, from] of [['before', ymd(Date.now() + 30 * DAY)], ['after', ymd(Date.now() - DAY)]]) {
+  // Both rules move together in 'before' and 'after'; 'split' is the real Niobe position on
+  // 1 Dec 2026: the fee is in force while staff can still extend until 1 April 2027.
+  for (const [phase, from, extEnd] of [
+    ['before', ymd(Date.now() + 30 * DAY), ymd(Date.now() + 30 * DAY)],
+    ['after', ymd(Date.now() - DAY), ymd(Date.now() - DAY)],
+    ['split', ymd(Date.now() - DAY), ymd(Date.now() + 160 * DAY)],
+  ]) {
     const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url)], {
-      env: { ...process.env, POLICY_PHASE: phase, GIFTCARD_POLICY_FROM: from, NIOBE_DATA_DIR: mkdtempSync(join(tmpdir(), `niobe-policy-${phase}-`)) },
+      env: { ...process.env, POLICY_PHASE: phase, GIFTCARD_LATE_FEE_FROM: from, GIFTCARD_EXTENSIONS_END: extEnd, NIOBE_DATA_DIR: mkdtempSync(join(tmpdir(), `niobe-policy-${phase}-`)) },
       encoding: 'utf8',
     });
     process.stdout.write(`\n${phase.toUpperCase()} the policy date (${from})\n${r.stdout}${r.stderr}`);
@@ -32,7 +38,7 @@ if (!process.env.POLICY_PHASE) {
 
 // ---------------------------------------------------------------- one phase
 const { reserveBasket, markPaid, basketCards, getCard, extendCard, quoteExtension, lookupAnyCard, chargeLateFee, sweepReservations } = await import('../src/cards.js');
-const { policyInForce, extensionBlocked, lateFeeNotice, POLICY_FROM } = await import('../src/policy.js');
+const { lateFeeInForce, extensionsEnded, extensionBlocked, lateFeeNotice, EXTENSIONS_END } = await import('../src/policy.js');
 const { deskExtend, deskLateFee } = await import('../src/carddesk.js');
 const { expiryReminderEmail } = await import('../src/cardsweep.js');
 const { renderGiftRedeemProblem, renderBalanceExpired, renderGiftRedeemCheck } = await import('../src/views.js');
@@ -47,11 +53,11 @@ function paidCard(amount = 500) {
   return getCard(basketCards(r.reference)[0].code);
 }
 const at = (t) => new Date(t).toISOString();
-const cutoff = Date.parse(`${POLICY_FROM}T00:00:00Z`);
+const cutoff = Date.parse(`${EXTENSIONS_END}T00:00:00Z`);
 const staff = { by: 'Akosua', paymentRef: 'RCPT-1' };
 
 if (process.env.POLICY_PHASE === 'before') {
-  ok(!policyInForce(), 'policy is not yet in force');
+  ok(!lateFeeInForce() && !extensionsEnded(), 'neither rule is in force yet');
 
   const early = paidCard(); early.expiresAt = at(Date.now() + 10 * DAY);
   let r = extendCard(early.code, staff);
@@ -75,7 +81,8 @@ if (process.env.POLICY_PHASE === 'before') {
 
   const soon = paidCard(); soon.expiresAt = at(Date.now() + 10 * DAY);
   const h = sweepReservations(new Date(), { readOnly: true }).expiringSoon.find((x) => x.masked && soon.code.endsWith(x.masked.slice(-4)));
-  ok(h && h.extendFeeGHS != null && /extend it by/.test(expiryReminderEmail(h).html), 'the 14-day reminder still offers an extension before the date');
+  ok(h && h.extendFeeGHS != null, 'the desk can still quote an extension before the date');
+  ok(!/extend/i.test(expiryReminderEmail(h).html) && /book before/i.test(expiryReminderEmail(h).html), 'but the reminder EMAIL never mentions an extension — only "book before" (nothing online offers one)');
 
   const f = chargeLateFee(fresh.code, { kind: 'no_show', bookingRef: 'B1', by: 'Akosua' });
   ok(f.reason === 'fee_not_in_force' && getCard(fresh.code).balance === 500, 'no late fee can be taken before the date');
@@ -83,7 +90,7 @@ if (process.env.POLICY_PHASE === 'before') {
 }
 
 if (process.env.POLICY_PHASE === 'after') {
-  ok(policyInForce(), 'policy is in force');
+  ok(lateFeeInForce() && extensionsEnded(), 'both rules are in force');
 
   const lapsed = paidCard(); lapsed.expiresAt = at(Date.now() - 3 * DAY);
   ok(extendCard(lapsed.code, staff).reason === 'extensions_ended', 'an expired card can no longer be extended (paid)');
@@ -97,12 +104,12 @@ if (process.env.POLICY_PHASE === 'after') {
   const h = sweepReservations(new Date(), { readOnly: true }).expiringSoon.find((x) => x.masked && live.code.endsWith(x.masked.slice(-4)));
   const mail = h ? expiryReminderEmail(h).html : '';
   ok(h && h.extendFeeGHS === null, 'the 14-day reminder carries no extension price');
-  ok(!/extend it by/.test(mail) && /can no longer be extended/.test(mail), 'the reminder says "book before the date", not "we can extend"');
+  ok(!/extend/i.test(mail) && /book before/i.test(mail), 'the reminder says "book before the date" and never mentions extending');
 
   const page = renderGiftRedeemProblem({ reason: 'expired', booking: {} });
-  ok(/can no longer be extended/.test(page) && !/we'll see what we can do/.test(page), 'the booking page no longer promises "we\'ll see what we can do"');
+  ok(/can't be used/.test(page) && !/we'll see what we can do/.test(page) && !/extend/i.test(page), 'the booking page says the card has expired, with no promise and no mention of extending');
   const bal = renderBalanceExpired({ last4: '1234', balance: 300, expiresAt: at(Date.now() - DAY), extendable: false, extendFeeGHS: null });
-  ok(/can no longer be extended/.test(bal), 'the balance page says the same');
+  ok(/can no longer be used/.test(bal) && !/extend/i.test(bal), 'the balance page says the same, with no mention of extending');
 
   // The fee.
   const c = paidCard(500);
@@ -132,6 +139,20 @@ if (process.env.POLICY_PHASE === 'after') {
 
   const notice = lateFeeNotice();
   ok(!/^From/.test(notice) && /^If you need/.test(notice), 'after the date the notice drops "From ..." and reads as a sentence');
+}
+
+if (process.env.POLICY_PHASE === 'split') {
+  ok(lateFeeInForce() && !extensionsEnded(), 'split: the fee is in force while extensions are still allowed');
+  const c = paidCard(500);
+  ok(chargeLateFee(c.code, { kind: 'no_show', bookingRef: 'S1', by: 'Akosua' }).ok && getCard(c.code).balance === 350, 'split: the GHS 150 fee can be taken');
+  const lapsed = paidCard(); lapsed.expiresAt = at(Date.now() - 2 * DAY);
+  ok((await lookupAnyCard(lapsed.code)).extendable === true, 'split: an expired card shows as extendable to the desk');
+  ok(extendCard(lapsed.code, staff).ok, 'split: staff can still extend an expired card at their discretion');
+  const bal = renderBalanceExpired({ last4: '1234', balance: 300, expiresAt: at(Date.now() - DAY), extendable: true, extendFeeGHS: 100, extendDays: 30 });
+  ok(!/extend/i.test(bal) && /give us a call/.test(bal), 'split: the balance page still never offers an extension — it invites a call');
+  const live = paidCard(); live.expiresAt = at(Date.now() + 10 * DAY);
+  const h = sweepReservations(new Date(), { readOnly: true }).expiringSoon.find((x) => x.masked && live.code.endsWith(x.masked.slice(-4)));
+  ok(h && !/extend/i.test(expiryReminderEmail(h).html), 'split: the reminder email never mentions an extension');
 }
 
 // Both phases: the booking page always carries the notice and the box.

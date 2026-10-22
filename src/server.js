@@ -25,7 +25,11 @@ import { checkGiftCard, redeemForBooking, claimSimpleSpaCard } from './redeem.js
 import { publicBalanceCheck, normaliseCode } from './balance.js';
 import { clientIp, createLimiter } from './ratelimit.js';
 import { voucherHtml } from './voucher.js';
-import { getCard } from './cards.js';
+import { getCard, MIN_VALUE as OWN_CARD_MIN } from './cards.js';
+
+// Smallest amount the staff test page accepts: the card ledger's own floor (GHS 50), not the public
+// page's GHS 100. Read from cards.js rather than restated, so the two can never disagree.
+const GIFTCARD_TEST_MIN = OWN_CARD_MIN;
 
 // The printable voucher is reachable by anyone with a code. Generous for the person who
 // prints, reloads, and prints again; useless as a way to probe codes in bulk.
@@ -231,6 +235,20 @@ const server = createServer(async (req, res) => {
     // card, extend one, and create live money at the counter, so it must never be reachable
     // without one. Placed before the /desk/<branchId> matcher for the same reason /desk/search
     // is: that pattern would otherwise read "cards" as a branch id and answer 404.
+    // Staff test of the OWN gift card system while the public page still sells through GiftUp.
+    // Under /desk/ so nginx's staff login guards it — and it must come before /desk/<branchId>,
+    // or "gift-card-test" would be read as a branch id.
+    if (p === '/desk/gift-card-test' || p === '/desk/gift-card-test/start') {
+      const opts = { issuer: 'niobe', action: '/desk/gift-card-test/start', test: true, min: GIFTCARD_TEST_MIN };
+      if (req.method === 'GET') return html(res, 200, renderGiftCardPage(await giftCatalog('niobe'), null, opts));
+      const body = parseBody(await readBody(req), req.headers['content-type']);
+      try {
+        const { authorization_url } = await startPurchase(body, body.gateway, { issuer: 'niobe', minAmount: GIFTCARD_TEST_MIN, test: true });
+        return redirect(res, authorization_url);
+      } catch (e) {
+        return html(res, 400, renderGiftCardPage(await giftCatalog('niobe'), e.message || 'Something went wrong.', opts));
+      }
+    }
     if (p === '/desk/cards') {
       const designs = CONFIG.giftcardIssuer === 'niobe' ? cardDesigns() : [];
       if (req.method === 'GET') {

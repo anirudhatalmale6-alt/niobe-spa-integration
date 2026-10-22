@@ -1,7 +1,7 @@
 import { CONFIG } from './config.js';
 import { sweepReservations, clearReminder, clearReminderByReference, RESERVE_HOURS, EXPIRY_REMIND_DAYS, EXTENSION_DAYS } from './cards.js';
 import { sendEmail } from './notify.js';
-import { POLICY_FROM_LABEL } from './policy.js';
+import { OFFER_EXTENSIONS_ONLINE } from './policy.js';
 
 // The two clocks a gift card runs on, actually running.
 //
@@ -58,11 +58,10 @@ export function expiryReminderEmail(h) {
       — that is ${h.daysLeft} day${h.daysLeft === 1 ? '' : 's'} from today.</p>
       <p><a href="${esc(h.bookUrl)}" style="display:inline-block;background:#8a6a3c;color:#fff;
       text-decoration:none;padding:11px 20px;border-radius:10px;font-weight:600">Book an appointment</a></p>
-      ${h.extendFeeGHS != null ? `<p style="color:#8b7d73;font-size:14px">If you cannot use it in time, we can extend it by
+      ${OFFER_EXTENSIONS_ONLINE && h.extendFeeGHS != null ? `<p style="color:#8b7d73;font-size:14px">If you cannot use it in time, we can extend it by
       ${EXTENSION_DAYS} days for ${esc(money(h.extendFeeGHS))} — just reply or call any branch
-      before the date above.</p>` : `<p style="color:#8b7d73;font-size:14px">Please book before the date above —
-      from ${esc(POLICY_FROM_LABEL)} our gift cards can no longer be extended, so any balance left after
-      it expires cannot be used.</p>`}`),
+      before the date above.</p>` : `<p style="color:#8b7d73;font-size:14px">Please book before the date above so the balance
+      is not lost.</p>`}`),
   };
 }
 

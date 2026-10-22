@@ -6,7 +6,7 @@ import { CONFIG } from './config.js';
 import { validateCard as validateGiftUpCard } from './giftup.js';
 import { lookupSimpleSpaCard } from './sscards.js';
 import { GIFTCARD_REF_CODE } from './hubtel.js';
-import { extensionBlocked, policyInForce, lateFeeFor, LATE_KINDS, LATE_FEE_GHS } from './policy.js';
+import { extensionBlocked, lateFeeInForce, lateFeeFor, LATE_KINDS, LATE_FEE_GHS } from './policy.js';
 
 // Niobe's OWN gift-card ledger — the system of record for cards sold on the new site,
 // replacing GiftUp for new sales. GiftUp and SimpleSpa cards already in customers'
@@ -238,7 +238,7 @@ function newReference() {
 const isEmail = (s) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(s || '').trim());
 const money = (n) => Math.round(Number(n) * 100) / 100;
 
-const MIN_VALUE = Number(process.env.GIFTCARD_MIN_GHS || 50);
+export const MIN_VALUE = Number(process.env.GIFTCARD_MIN_GHS || 50);
 const MAX_VALUE = Number(process.env.GIFTCARD_MAX_GHS || 20000);
 
 function normaliseItem(item, index) {
@@ -327,6 +327,9 @@ export function reserveBasket({ buyerName, buyerEmail, buyerPhone, items, channe
       balance: 0,
       currency: 'GHS',
       reference,
+      // How it was sold. 'staff-test' cards are real and spendable, so the desk flags them to
+      // be cancelled once testing is done.
+      channel,
       buyerName: String(buyerName || '').trim() || 'Niobe customer',
       buyerEmail: String(buyerEmail || '').trim(),
       buyerPhone: String(buyerPhone || '').trim(),
@@ -475,7 +478,7 @@ export function spend(code, amount, { reason, reference, branchId, by } = {}) {
 // cancelled at short notice or did not come — and it is tied to the booking so the same
 // booking can never be charged twice, however many times the button is pressed.
 export function chargeLateFee(code, { kind, bookingRef, by, now = new Date() } = {}) {
-  if (!policyInForce(now)) return { ok: false, reason: 'fee_not_in_force' };
+  if (!lateFeeInForce(now)) return { ok: false, reason: 'fee_not_in_force' };
   if (!LATE_KINDS[kind]) return { ok: false, reason: 'bad_kind' };
   const who = String(by || '').trim();
   const ref = String(bookingRef || '').trim();

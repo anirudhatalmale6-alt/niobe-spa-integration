@@ -1,33 +1,36 @@
-// Niobe's gift-card policy change, agreed 12 Oct 2026, in force from 1 December 2026:
+// Niobe's gift-card policy. Two rules with their OWN dates (client, 12 + 22 Oct 2026):
 //
-//   1. Gift cards can no longer be extended — no paid extension, no free grace days, no
-//      staff override. A card that expires ON or after the date is already affected, so it
-//      cannot be extended in advance either. Extensions bought before the date stand.
-//   2. A gift-card booking cancelled or rescheduled with less than 24 hours' notice, or not
-//      turned up to, costs GHS 150 off the card — or whatever is left, if that is less.
+//   1. No more extensions — from 1 April 2027 (moved from 1 December 2026 so corporate and
+//      festive-season buyers can still be helped). Until then staff may extend at their
+//      discretion from the card desk, but NOTHING online offers or mentions an extension
+//      (reminder email, balance page). From the date, every path refuses: paid, free grace and
+//      manager override, and a card expiring on/after the date cannot be extended in advance.
+//   2. Late-change / no-show fee — from 1 December 2026: GHS 150 off the card, or whatever is
+//      left if that is less.
 //
-// One place, so the desk, the reminder email, the balance page and the booking page can
-// never disagree about the date. Ghana keeps UTC all year, so midnight UTC IS midnight in
-// Accra and no timezone arithmetic is needed.
+// One place, so the desk, the email, the balance page and the booking page can never disagree.
+// Ghana keeps UTC all year, so midnight UTC IS midnight in Accra.
 const startOf = (ymd) => Date.parse(`${ymd}T00:00:00Z`);
+const label = (ymd) => new Date(startOf(ymd)).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
 
-export const POLICY_FROM = process.env.GIFTCARD_POLICY_FROM || '2026-12-01';
+export const EXTENSIONS_END = process.env.GIFTCARD_EXTENSIONS_END || '2027-04-01';
+export const LATE_FEE_FROM = process.env.GIFTCARD_LATE_FEE_FROM || process.env.GIFTCARD_POLICY_FROM || '2026-12-01';
+export const EXTENSIONS_END_LABEL = label(EXTENSIONS_END);
+export const LATE_FEE_FROM_LABEL = label(LATE_FEE_FROM);
 export const LATE_FEE_GHS = Number(process.env.GIFTCARD_LATE_FEE_GHS || 150);
 export const LATE_NOTICE_HOURS = Number(process.env.GIFTCARD_LATE_NOTICE_HOURS || 24);
+// "Remove all signs of extension online" — customers are never offered one in writing. Staff
+// still can, case by case, until EXTENSIONS_END.
+export const OFFER_EXTENSIONS_ONLINE = String(process.env.GIFTCARD_OFFER_EXTENSIONS_ONLINE || '').toLowerCase() === 'true';
 
-export const POLICY_FROM_LABEL = new Date(startOf(POLICY_FROM))
-  .toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+export const extensionsEnded = (now = new Date()) => now.getTime() >= startOf(EXTENSIONS_END);
+export const lateFeeInForce = (now = new Date()) => now.getTime() >= startOf(LATE_FEE_FROM);
 
-export function policyInForce(now = new Date()) {
-  return now.getTime() >= startOf(POLICY_FROM);
-}
-
-// Why this card cannot be extended, or null if it still can. Every extension path asks
-// this — including the free grace and a manager's override, because a rule with a
-// discretionary back door is a rule that quietly stops existing.
+// Why this card cannot be extended, or null if it still can. Every extension path asks this —
+// including the free grace and a manager's override.
 export function extensionBlocked(expiresAt, now = new Date()) {
-  if (policyInForce(now)) return 'extensions_ended';
-  if (expiresAt && Date.parse(expiresAt) >= startOf(POLICY_FROM)) return 'expires_after_cutoff';
+  if (extensionsEnded(now)) return 'extensions_ended';
+  if (expiresAt && Date.parse(expiresAt) >= startOf(EXTENSIONS_END)) return 'expires_after_cutoff';
   return null;
 }
 
@@ -43,10 +46,9 @@ export const LATE_KINDS = {
   no_show: 'Did not attend',
 };
 
-// What a gift-card customer reads, and ticks, before the card is used. Worded for before
-// the date ("From 1 December 2026, ...") and after it, so the page never needs editing.
+// What a gift-card customer reads, and ticks, before the card is used.
 export function lateFeeNotice(now = new Date()) {
-  const lead = policyInForce(now) ? '' : `From ${POLICY_FROM_LABEL}, `;
+  const lead = lateFeeInForce(now) ? '' : `From ${LATE_FEE_FROM_LABEL}, `;
   const body = `if you need to cancel or reschedule a gift card booking, please give us at least ${LATE_NOTICE_HOURS} hours' notice. A change with less notice, or a missed appointment, carries a GHS ${LATE_FEE_GHS} fee taken from your gift card balance (or whatever remains, if that is less).`;
   return lead ? lead + body : body.charAt(0).toUpperCase() + body.slice(1);
 }

@@ -135,16 +135,18 @@ function normaliseBuyer({ buyerName, buyerEmail, asGift, recipientName, recipien
 // The package list, from whichever issuer is in charge. One function so that every caller —
 // the checkout page, the price resolver, the tests — asks the same question and cannot end up
 // pricing against one catalogue while rendering the other.
-export async function giftCatalog() {
-  return CONFIG.giftcardIssuer === 'niobe' ? getOwnCatalog() : await getCatalog();
+// `issuer` defaults to the live switch; the staff test page passes 'niobe' explicitly so the
+// team can buy from the new system while the public page still sells through GiftUp.
+export async function giftCatalog(issuer = CONFIG.giftcardIssuer) {
+  return issuer === 'niobe' ? getOwnCatalog() : await getCatalog();
 }
 
 // Resolve WHAT is being bought: a chosen package (fixed value, taken from the CATALOGUE rather
 // than from the browser so a posted price cannot be tampered with) or a custom amount
 // (validated against the min/max). Returns { value, itemId, packageName }.
-async function resolveSelection({ itemId, amount }) {
-  const catalog = await giftCatalog();
-  const find = CONFIG.giftcardIssuer === 'niobe' ? findOwnItem : findItem;
+async function resolveSelection({ itemId, amount }, { issuer = CONFIG.giftcardIssuer, minAmount = CONFIG.giftCardMinAmount } = {}) {
+  const catalog = await giftCatalog(issuer);
+  const find = issuer === 'niobe' ? findOwnItem : findItem;
   if (itemId) {
     const item = find(catalog, itemId);
     if (!item) throw new Error('That package is no longer available — please choose another.');
@@ -152,7 +154,7 @@ async function resolveSelection({ itemId, amount }) {
     return { value: Math.round(Number(item.value) * 100) / 100, itemId: item.id, packageName: item.name };
   }
   const amt = Math.round(Number(amount) * 100) / 100;
-  if (!(amt >= CONFIG.giftCardMinAmount)) throw new Error(`The minimum gift card amount is GHS ${CONFIG.giftCardMinAmount}.`);
+  if (!(amt >= minAmount)) throw new Error(`The minimum gift card amount is GHS ${minAmount}.`);
   if (amt > CONFIG.giftCardMaxAmount) throw new Error(`The maximum gift card amount is GHS ${CONFIG.giftCardMaxAmount}. For larger amounts please contact us.`);
   // On the GiftUp route a free-amount card is attached to the "custom amount" item so it
   // inherits that item's design and terms. We have no such indirection — an amount is an
@@ -223,9 +225,9 @@ function basketItems(p, quantity) {
 
 // Start a gift-card purchase: price it (GHS, or the foreign-currency charge for the abroad rail),
 // kick off the payment, and stash the record so finalize can issue the card after payment.
-export async function startPurchase(input, preferredGateway) {
+export async function startPurchase(input, preferredGateway, { issuer = CONFIG.giftcardIssuer, minAmount = CONFIG.giftCardMinAmount, test = false } = {}) {
   const buyer = normaliseBuyer(input);
-  const sel = await resolveSelection(input);
+  const sel = await resolveSelection(input, { issuer, minAmount });
   const quantity = normaliseQuantity(input.quantity);
   const p = {
     ...buyer, amount: sel.value, itemId: sel.itemId, packageName: sel.packageName, quantity,
@@ -243,10 +245,12 @@ export async function startPurchase(input, preferredGateway) {
   // no balance and their codes are withheld until markPaid, so an abandoned checkout leaves
   // behind a dead reservation the 48-hour sweep tidies up — never a spendable voucher.
   let reserved = null;
-  if (CONFIG.giftcardIssuer === 'niobe') {
+  if (issuer === 'niobe') {
     reserved = reserveBasket({
       buyerName: p.buyerName, buyerEmail: p.buyerEmail, buyerPhone: input.buyerPhone,
-      items: basketItems(p, quantity), channel: 'web',
+      // A staff test purchase is a REAL card paid with real money; the channel says it was a
+      // test so it can be found and cancelled from the card desk afterwards.
+      items: basketItems(p, quantity), channel: test ? 'staff-test' : 'web',
     });
   }
   const reference = reserved ? reserved.reference : makeGiftRef();
@@ -273,7 +277,8 @@ export async function startPurchase(input, preferredGateway) {
 
   purchases.set(reference, {
     reference, ...p, gateway: init.gateway,
-    issuer: CONFIG.giftcardIssuer,   // pinned at the start, not read again at finalize — see below
+    issuer,                          // pinned at the start, not read again at finalize — see below
+    ...(test ? { test: true } : {}),
     surchargePct, feeGHS, payableGHS, discountPct, discountGHS, subtotal,
     chargeAmount: charge.amount, chargeCurrency: charge.currency, chargeRate: charge.rate,
     status: 'pending',

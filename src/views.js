@@ -3,7 +3,7 @@
 import { displayName as GATEWAY, displayNameOf, backup } from './gateway.js';
 import { CONFIG } from './config.js';
 import { designs, designGroups } from './voucher.js';
-import { policyInForce, POLICY_FROM_LABEL, lateFeeNotice, LATE_FEE_AGREE_LABEL } from './policy.js';
+import { extensionsEnded, OFFER_EXTENSIONS_ONLINE, lateFeeNotice, LATE_FEE_AGREE_LABEL } from './policy.js';
 
 // The late-change notice and the box that must be ticked, shared by every page that is
 // about to use a gift card for a booking. `required` stops the browser; server.js checks again.
@@ -347,8 +347,7 @@ export function renderCheckout(pay, booking) {
 
 // --- Online gift-card purchase ---
 
-export function renderGiftCardPage(catalog, note) {
-  const min = CONFIG.giftCardMinAmount;
+export function renderGiftCardPage(catalog, note, { issuer = CONFIG.giftcardIssuer, action = '/gift-card/start', test = false, min = CONFIG.giftCardMinAmount } = {}) {
   const presets = [200, 500, 1000].filter((v) => v >= min);
   const chips = [min, ...presets].map((v) =>
     `<button type="button" class="chip" data-amt="${v}">${GHS(v)}</button>`).join('');
@@ -394,7 +393,7 @@ export function renderGiftCardPage(catalog, note) {
   // there would be a lie: the buyer would choose one thing and receive another. Issuing the
   // cards ourselves is what makes the choice expressible, so the control appears exactly when
   // it can be honoured and not one deploy sooner.
-  const designList = CONFIG.giftcardIssuer === 'niobe' ? designs() : [];
+  const designList = issuer === 'niobe' ? designs() : [];
   const dGroups = designList.length ? designGroups() : [];
   // GROUPED BY OCCASION, at Niobe's request — "categorisation is a must". Their instinct to
   // carry a design for every occasion is right; showing all of them at once is what makes it
@@ -442,8 +441,9 @@ export function renderGiftCardPage(catalog, note) {
     <div class="card">
       <h2 style="margin-top:2px">Send the gift of Niobe</h2>
       <p style="color:var(--muted);font-size:14px;margin:0 0 14px">Redeemable at any Niobe branch, valid for ${CONFIG.giftCardValidityDays} days. The voucher is emailed as soon as payment clears.</p>
+      ${test ? `<div class="note" style="text-align:left;background:#fff4e5;border-left:3px solid #b0492e;padding:10px 12px;margin:0 0 12px"><strong>STAFF TEST.</strong> This sells from Niobe's own gift card system, which the public page does not use yet. The payment is REAL and the card is REAL and spendable. Use the smallest amount (GHS ${min}), then cancel the test cards on the card desk when you are done.</div>` : ''}
       ${note ? `<div class="note" style="color:#b0492e;margin:0 0 12px">${note}</div>` : ''}
-      <form method="POST" action="/gift-card/start" id="gcform">
+      <form method="POST" action="${action}" id="gcform">
         ${modeToggle}
         ${packageSection}
         <div id="secCustom" style="${packageDefault ? 'display:none' : ''}">
@@ -869,8 +869,10 @@ export function renderGiftRedeemProblem(c) {
   const b = c.booking;
   const msg = {
     not_found: 'We couldn\'t find that gift card code. Please check the code on your voucher email and try again — it\'s easy to mistype.',
-    expired: policyInForce()
-      ? `This gift card has passed its expiry date. Since ${POLICY_FROM_LABEL} our gift cards can no longer be extended, so unfortunately it can't be used.`
+    // Nothing online mentions an extension (client, 22 Oct 2026). Before EXTENSIONS_END the desk
+    // may still help case by case, so the message invites a call without promising anything.
+    expired: extensionsEnded()
+      ? 'This gift card has passed its expiry date, so it can\'t be used.'
       : 'This gift card has passed its expiry date, so it can\'t be used online. Please give us a call — we\'ll see what we can do for you.',
     voided: 'This gift card is no longer active. Please give us a call and we\'ll look into it for you.',
     not_redeemable: 'This gift card can\'t be redeemed at the moment. Please give us a call and we\'ll sort it out.',
@@ -1049,14 +1051,14 @@ export function renderBalanceExpired(r) {
       <div class="row"><span class="k">Card</span><span class="v">••••&nbsp;${esc(r.last4)}</span></div>
       <div class="row"><span class="k">Balance still on it</span><span class="v">${money(r.balance ?? 0, cur)}</span></div>
       ${r.expiresAt ? `<div class="row"><span class="k">Expired on</span><span class="v">${esc(prettyDate(r.expiresAt))}</span></div>` : ''}
-      ${r.extendable && worthIt ? `
+      ${OFFER_EXTENSIONS_ONLINE && r.extendable && worthIt ? `
         <div class="sep">You can bring it back</div>
         <div class="note" style="text-align:left;margin-top:0">
           We can extend this card by ${r.extendDays} days for ${money(r.extendFeeGHS, 'GHS')}. Give us a call or
           drop into any branch with the card and we'll sort it out — the balance above is untouched and stays yours.
         </div>` : `
-        <div class="note" style="text-align:left">${policyInForce()
-          ? `Since ${POLICY_FROM_LABEL} our gift cards can no longer be extended, so unfortunately this balance can't be used.`
+        <div class="note" style="text-align:left">${extensionsEnded()
+          ? `This card has passed its expiry date, so unfortunately the balance can no longer be used.`
           : `Please give us a call and we'll see what we can do for you — there's still ${money(r.balance ?? 0, cur)}
           on this card and we'd rather you had the treatment than lost it.`}
         </div>`}

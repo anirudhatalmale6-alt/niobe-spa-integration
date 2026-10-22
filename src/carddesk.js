@@ -3,7 +3,7 @@ import {
   getCard, publicCard, lookupAnyCard, voidCard, extendCard, quoteExtension,
   reserveBasket, markPaid, basketCards, mask, EXTENSION_DAYS, GRACE_DAYS, chargeLateFee,
 } from './cards.js';
-import { POLICY_FROM_LABEL, LATE_KINDS, LATE_FEE_GHS, policyInForce } from './policy.js';
+import { EXTENSIONS_END_LABEL, LATE_FEE_FROM_LABEL, LATE_KINDS, LATE_FEE_GHS, lateFeeInForce } from './policy.js';
 import { voucherHtml } from './voucher.js';
 
 // The staff side of the gift-card ledger: look a card up, sell one over the counter, cancel
@@ -34,9 +34,9 @@ const WHY = {
   not_paid: 'That card has not been paid for, so there is nothing to cancel.',
   not_spendable: 'That card is not active.',
   not_extendable: 'Only a paid or expired card can be extended.',
-  extensions_ended: `Gift cards can no longer be extended — that ended on ${POLICY_FROM_LABEL}.`,
-  expires_after_cutoff: `This card expires on or after ${POLICY_FROM_LABEL}, so it cannot be extended — from that date no card can be.`,
-  fee_not_in_force: `The late-change fee only applies from ${POLICY_FROM_LABEL}.`,
+  extensions_ended: `Gift cards can no longer be extended — that ended on ${EXTENSIONS_END_LABEL}.`,
+  expires_after_cutoff: `This card expires on or after ${EXTENSIONS_END_LABEL}, so it cannot be extended — from that date no card can be.`,
+  fee_not_in_force: `The late-change fee only applies from ${LATE_FEE_FROM_LABEL}.`,
   bad_kind: 'Choose what happened: late cancellation, late reschedule or no-show.',
   fee_needs_staff: 'Please enter your name.',
   fee_needs_booking: 'Enter the booking it is for, so it cannot be charged twice.',
@@ -70,6 +70,7 @@ export function deskLookup(rawCode) {
     // conversation in a way a current balance never does.
     transactions: card.transactions || [],
     buyer: { name: card.buyerName, email: card.buyerEmail, phone: card.buyerPhone },
+    channel: card.channel || null,
     recipient: card.gift ? { name: card.recipientName, email: card.recipientEmail } : null,
     quote: quoteExtension(code),
     payment: card.payment || null,
@@ -221,6 +222,7 @@ function cardPanel(found) {
       <div class="row"><span class="k">Expires</span><span class="v">${c.expiresAt
         ? esc(new Date(c.expiresAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }))
         : 'not paid for yet'}${c.daysLeft != null ? ` <span class="k">(${c.daysLeft} day${c.daysLeft === 1 ? '' : 's'})</span>` : ''}</span></div>
+      ${found.channel === 'staff-test' ? '<p class="warn" style="margin:0 0 10px">STAFF TEST card — bought from the test page. It is real and spendable: cancel it below once testing is done.</p>' : ''}
       <div class="row"><span class="k">Bought by</span><span class="v">${esc(found.buyer?.name || '')}${found.buyer?.email ? ` <span class="k">${esc(found.buyer.email)}</span>` : ' <span class="k">no email — cannot be warned before it expires</span>'}</span></div>
       ${found.recipient ? `<div class="row"><span class="k">For</span><span class="v">${esc(found.recipient.name || '')}</span></div>` : ''}
       ${c.extensions ? `<div class="row"><span class="k">Extended</span><span class="v">${c.extensions} time(s)</span></div>` : ''}
@@ -251,7 +253,7 @@ function cardPanel(found) {
         ${q.graceAvailable ? `<button class="ghost" type="submit" name="grace" value="true">Give the free ${GRACE_DAYS} days</button>` : ''}
       </form>`}
     </div>
-    ${policyInForce() && c.status === 'paid' ? `<div class="card">
+    ${lateFeeInForce() && c.status === 'paid' ? `<div class="card">
       <h2>Late change or no-show</h2>
       <p style="color:var(--muted);font-size:13px;margin:0">Takes ${esc(money(LATE_FEE_GHS))} off the card, or whatever is left if less. Once per booking.</p>
       <form method="POST" action="/desk/cards">
