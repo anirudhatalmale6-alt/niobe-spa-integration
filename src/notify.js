@@ -17,7 +17,7 @@ async function alertSmsCredit(detail) {
   if (Date.now() - lastSmsAlertAt < SMS_ALERT_EVERY_MS) return { ok: false, skipped: 'already_alerted_today' };
   lastSmsAlertAt = Date.now();
   try { mkdirSync(DATA_DIR, { recursive: true }); writeFileSync(SMS_ALERT_FILE, JSON.stringify({ at: lastSmsAlertAt, detail: String(detail).slice(0, 300) })); } catch { /* the alert still goes */ }
-  const to = CONFIG.bookingEmailFallback || CONFIG.notifyEmailFrom;
+  const to = CONFIG.smsAlertEmail || CONFIG.bookingEmailFallback || CONFIG.notifyEmailFrom;
   if (!to) { console.log('[notify] SMS credit has run out and there is no inbox configured to tell'); return { ok: false, error: 'no_inbox' }; }
   console.log('[notify] SMS credit has run out — alerting the central mailbox');
   // Record the alert's OWN outcome: an alert whose failure is silent is the bug it exists to catch.

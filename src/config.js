@@ -255,6 +255,8 @@ export const CONFIG = {
   // Where a branch's booking team reads its mail. Falls back to a central address so a
   // branch without its own configured inbox still reaches somebody.
   bookingEmailFallback: process.env.BOOKING_EMAIL || '',
+  // Who is told when Hubtel SMS credit runs out (client, 22 Oct 2026: "send the email to me").
+  smsAlertEmail: process.env.SMS_ALERT_EMAIL || '',
   graphTenantId: process.env.GRAPH_TENANT_ID || '',
   graphClientId: process.env.GRAPH_CLIENT_ID || '',
   graphClientSecret: process.env.GRAPH_CLIENT_SECRET || '',
