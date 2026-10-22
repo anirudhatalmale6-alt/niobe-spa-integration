@@ -47,6 +47,27 @@ const CATALOGUE = [
   { id: 'add-33', name: 'To my wife',          file: 'add-33.jpg', picks: 1,   occasion: 'Love' },
   { id: 'add-34', name: 'Botanical white',     file: 'add-34.jpg', picks: 1,   occasion: 'Any occasion' },
   { id: 'add-35', name: 'Black & gold',        file: 'add-35.jpg', picks: 1,   occasion: 'Any occasion' },
+  // The 16 'everyday' designs from Niobe's old gift-card site (its ids 18-33), added 22 Oct 2026
+  // at the client's request ("add more of the gift card themes"). The old site recorded almost no
+  // orders, so there are no pick counts — 0 puts them after the eleven above, in site order.
+  // Names and occasions read off the artwork. 27, 29 and 30 are only 576px wide: fine on screen,
+  // soft in print.
+  { id: 'site-18', name: 'To my lover (red silk)',            file: 'site-18.jpg', picks: 0, occasion: 'Love' },
+  { id: 'site-19', name: 'To my wife (gift box)',             file: 'site-19.jpg', picks: 0, occasion: 'Love' },
+  { id: 'site-20', name: 'I love you (red roses)',            file: 'site-20.jpg', picks: 0, occasion: 'Love' },
+  { id: 'site-21', name: 'I love you (black & gold)',         file: 'site-21.jpg', picks: 0, occasion: 'Love' },
+  { id: 'site-22', name: 'To a special friend (gold stripes)', file: 'site-22.jpg', picks: 0, occasion: 'Friendship' },
+  { id: 'site-23', name: 'To a special friend (black & gold)', file: 'site-23.jpg', picks: 0, occasion: 'Friendship' },
+  { id: 'site-24', name: 'Silver & gold bow',                 file: 'site-24.jpg', picks: 0, occasion: 'Any occasion' },
+  { id: 'site-25', name: 'Gold floral wave',                  file: 'site-25.jpg', picks: 0, occasion: 'Any occasion' },
+  { id: 'site-26', name: 'Gold silk',                         file: 'site-26.jpg', picks: 0, occasion: 'Any occasion' },
+  { id: 'site-27', name: 'Gold ribbon on black',              file: 'site-27.jpg', picks: 0, occasion: 'Any occasion' },
+  { id: 'site-28', name: 'Gold star bow',                     file: 'site-28.jpg', picks: 0, occasion: 'Any occasion' },
+  { id: 'site-29', name: 'Kraft parcel',                      file: 'site-29.jpg', picks: 0, occasion: 'Any occasion' },
+  { id: 'site-30', name: 'Gold ribbons on cream',             file: 'site-30.jpg', picks: 0, occasion: 'Any occasion' },
+  { id: 'site-31', name: 'Black & gold frame',                file: 'site-31.jpg', picks: 0, occasion: 'Any occasion' },
+  { id: 'site-32', name: 'Cream & gold script',               file: 'site-32.jpg', picks: 0, occasion: 'Any occasion' },
+  { id: 'site-33', name: 'Red heart print',                   file: 'site-33.jpg', picks: 0, occasion: 'Love' },
 ];
 
 // The occasion each design belongs to is Niobe's call, not mine — these are a starting point
