@@ -1,7 +1,7 @@
 import { CONFIG } from './config.js';
 import {
   getCard, publicCard, lookupAnyCard, voidCard, extendCard, quoteExtension,
-  reserveBasket, markPaid, basketCards, mask, EXTENSION_DAYS, GRACE_DAYS, chargeLateFee,
+  reserveBasket, markPaid, basketCards, mask, EXTENSION_DAYS, GRACE_DAYS, chargeLateFee, validDaysFor, BULK_MIN_CARDS, BULK_VALID_DAYS,
 } from './cards.js';
 import { EXTENSIONS_END_LABEL, LATE_FEE_FROM_LABEL, LATE_KINDS, LATE_FEE_GHS, lateFeeInForce } from './policy.js';
 import { voucherHtml } from './voucher.js';
@@ -118,24 +118,29 @@ export function deskExtend({ code, by, reason, grace, feeGHS, paymentRef }) {
 // and marks it paid in one go — but through exactly the same two steps the website uses, so a
 // counter card and a website card are the same kind of thing in the ledger, with the same
 // expiry, the same balance and the same audit trail.
-export function deskIssue({ amount, buyerName, buyerEmail, recipientName, design, by, paymentRef, branchId }) {
+export const DESK_MAX_CARDS = 200;
+export function deskIssue({ amount, quantity, buyerName, buyerEmail, recipientName, design, by, paymentRef, branchId }) {
   if (!clean(by)) return { ok: false, message: 'Please enter your name.' };
   const value = Number(amount);
   if (!(value > 0)) return { ok: false, message: 'Enter the amount the customer paid.' };
+  // A bulk order is ONE sale: one basket, one payment reference, one validity for every card.
+  // Selling 94 cards as 94 separate sales would never count as bulk.
+  const q = clean(quantity) === '' ? 1 : Number(quantity);
+  if (!Number.isInteger(q) || q < 1 || q > DESK_MAX_CARDS) return { ok: false, message: `Number of cards must be a whole number from 1 to ${DESK_MAX_CARDS}.` };
   // Left EMPTY when they do not give one, rather than invented. See reserveBasket.
   let reserved;
   try {
     reserved = reserveBasket({
       buyerName: clean(buyerName) || 'Counter sale',
       buyerEmail: clean(buyerEmail),
-      items: [{
+      items: Array.from({ length: q }, () => ({
         amount: value,
         forSelf: !clean(recipientName),
         recipientName: clean(recipientName),
         // Printed at the counter and handed over, so never emailed to a recipient.
         delivery: 'print',
         design: clean(design) || undefined,
-      }],
+      })),
       channel: 'counter',
     });
   } catch (e) {
@@ -147,13 +152,41 @@ export function deskIssue({ amount, buyerName, buyerEmail, recipientName, design
     by: clean(by),
   });
   if (!paid.ok) return { ok: false, message: why(paid.reason) };
-  const card = basketCards(reserved.reference)[0];
+  const cards = basketCards(reserved.reference);
+  const card = cards[0];
+  if (q > 1) {
+    return {
+      ok: true,
+      code: card.code,
+      message: `${q} cards issued at ${money(value)} each (${money(value * q)} in total), valid for ${validDaysFor(q)} days. Print the sheet of codes for the customer.`,
+      sheetUrl: `/desk/cards/sheet?ref=${encodeURIComponent(reserved.reference)}`,
+    };
+  }
   return {
     ok: true,
     code: card.code,
     message: `Card issued for ${money(value)}. Print the voucher and hand it over.`,
     voucherUrl: `/gift-card/voucher?code=${encodeURIComponent(card.code)}`,
   };
+}
+
+// A printable sheet of every code in one order — what a bulk buyer takes away. Paid cards only:
+// an unpaid card's code is never shown anywhere.
+export function renderCardSheet(reference) {
+  const cards = basketCards(String(reference || '')).filter((c) => c.status === 'paid' || c.status === 'expired');
+  if (!cards.length) return null;
+  const until = (iso) => new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const total = cards.reduce((n, c) => n + Number(c.faceValue || 0), 0);
+  const rows = cards.map((c, i) => `<tr><td>${i + 1}</td><td class="code">${esc(c.code)}</td><td class="num">${esc(money(c.faceValue))}</td><td>${esc(until(c.expiresAt))}</td></tr>`).join('');
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Niobe gift cards — ${esc(reference)}</title>
+<style>body{font:14px/1.5 Georgia,serif;color:#2b2320;margin:24px}h1{font-size:20px;margin:0 0 4px}.sub{color:#7a6d63;margin:0 0 16px}
+table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #e3d8cc;padding:7px 8px;text-align:left}.num{text-align:right}
+.code{font-family:Menlo,Consolas,monospace;font-size:15px;letter-spacing:.04em}@media print{.noprint{display:none}}</style></head><body>
+<h1>Niobe Beauty gift cards</h1>
+<p class="sub">Order ${esc(reference)} · ${cards.length} card${cards.length === 1 ? '' : 's'} · ${esc(money(total))} in total · bought by ${esc(cards[0].buyerName || '')}</p>
+<table><tr><th>#</th><th>Code</th><th class="num">Value</th><th>Valid until</th></tr>${rows}</table>
+<p class="sub" style="margin-top:14px">Redeemable at any Niobe branch, or online with the code when booking. Each code is a separate card and works on its own.</p>
+<p class="noprint"><button onclick="window.print()">Print</button></p></body></html>`;
 }
 
 // --- the page ---------------------------------------------------------------
@@ -189,7 +222,8 @@ const shell = (title, body) => `<!doctype html><html lang="en"><head><meta chars
 
 const messageBox = (m) => (m ? `<div class="msg ${m.ok ? 'ok' : 'bad'}">${esc(m.message)}${
   m.code ? ` <span class="code" style="font-size:15px">${esc(m.code)}</span>` : ''}${
-  m.voucherUrl ? ` — <a href="${esc(m.voucherUrl)}" target="_blank" rel="noopener">print the voucher</a>` : ''}</div>` : '');
+  m.voucherUrl ? ` — <a href="${esc(m.voucherUrl)}" target="_blank" rel="noopener">print the voucher</a>` : ''}${
+  m.sheetUrl ? ` — <a href="${esc(m.sheetUrl)}" target="_blank" rel="noopener">open the sheet of codes</a>` : ''}</div>` : '');
 
 function cardPanel(found) {
   if (!found) return '';
@@ -303,7 +337,8 @@ export function renderCardDesk({ query = '', found = null, message = null, desig
       <form method="POST" action="/desk/cards">
         <input type="hidden" name="action" value="issue">
         <div class="cols">
-          <div><label>Amount paid (GHS)</label><input name="amount" inputmode="decimal" required placeholder="500"></div>
+          <div><label>Amount per card (GHS)</label><input name="amount" inputmode="decimal" required placeholder="500"></div>
+          <div><label>Number of cards</label><input name="quantity" type="number" min="1" max="${DESK_MAX_CARDS}" step="1" value="1" inputmode="numeric"></div>
           <div><label>Payment reference</label><input name="paymentRef" placeholder="Receipt number"></div>
         </div>
         <div class="cols">
@@ -315,7 +350,8 @@ export function renderCardDesk({ query = '', found = null, message = null, desig
           ${designOptions ? `<div><label>Design</label><select name="design">${designOptions}</select></div>` : ''}
         </div>
         <label>Your name</label><input name="by" required placeholder="Who is doing this">
-        <button type="submit">Issue the card</button>
+        <p style="color:var(--muted);font-size:13px;margin:8px 0 0">${BULK_MIN_CARDS} or more cards in one sale are each valid for ${BULK_VALID_DAYS} days instead of the usual ${validDaysFor(1)}.</p>
+        <button type="submit">Issue the card(s)</button>
       </form>
       <p style="color:var(--muted);font-size:12.5px;margin:12px 0 0">Without an email address the card still works perfectly — it just cannot be emailed, and nobody can be warned before it expires. Print the voucher and hand it over.</p>
     </div>

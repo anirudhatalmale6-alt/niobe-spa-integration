@@ -440,7 +440,7 @@ export function renderGiftCardPage(catalog, note, { issuer = CONFIG.giftcardIssu
     <div class="brand"><div class="n">Niobe Beauty</div><div class="t">Gift cards</div></div>
     <div class="card">
       <h2 style="margin-top:2px">Send the gift of Niobe</h2>
-      <p style="color:var(--muted);font-size:14px;margin:0 0 14px">Redeemable at any Niobe branch, valid for ${CONFIG.giftCardValidityDays} days. The voucher is emailed as soon as payment clears.</p>
+      <p style="color:var(--muted);font-size:14px;margin:0 0 14px">Redeemable at any Niobe branch, valid for ${CONFIG.giftCardValidityDays} days${issuer === 'niobe' ? ` (${CONFIG.giftCardBulkValidityDays} days when you buy ${CONFIG.giftCardBulkMinCards} or more in one purchase)` : ''}. The voucher is emailed as soon as payment clears.</p>
       ${test ? `<div class="note" style="text-align:left;background:#fff4e5;border-left:3px solid #b0492e;padding:10px 12px;margin:0 0 12px"><strong>STAFF TEST.</strong> This sells from Niobe's own gift card system, which the public page does not use yet. The payment is REAL and the card is REAL and spendable. Use the smallest amount (GHS ${min}), then cancel the test cards on the card desk when you are done.</div>` : ''}
       ${note ? `<div class="note" style="color:#b0492e;margin:0 0 12px">${note}</div>` : ''}
       <form method="POST" action="${action}" id="gcform">
@@ -556,7 +556,10 @@ export function renderGiftCardPage(catalog, note, { issuer = CONFIG.giftcardIssu
 // The card does not exist yet at this point, so there is no real expiry date to
 // quote — say the rule, and say what it runs from, which is payment and not delivery.
 function validityRows(pur) {
-  const days = CONFIG.giftCardValidityDays;
+  // The bulk 120 days is only true where WE issue the card. GiftUp sets its own expiry, so a GiftUp
+  // order of 20 must not be promised 120 days it will not get.
+  const days = pur.issuer === 'niobe' && Number(pur.quantity) >= CONFIG.giftCardBulkMinCards
+    ? CONFIG.giftCardBulkValidityDays : CONFIG.giftCardValidityDays;
   const rows = [`<div class="row"><span class="k">Valid for</span><span class="v">${days} days from payment</span></div>`];
   // A scheduled delivery does not move the expiry. The buyer choosing next Friday is
   // quietly spending the recipient's window, and they can only weigh that if we say so.

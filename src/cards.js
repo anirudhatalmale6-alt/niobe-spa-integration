@@ -65,7 +65,12 @@ export const RESERVE_HOURS = Number(process.env.GIFTCARD_RESERVE_HOURS || 48);
 export const REMIND_HOURS = Math.max(1, Math.round(RESERVE_HOURS / 2));
 
 // The card's own life, all business decisions, all overridable without a code change.
-export const VALID_DAYS = Number(process.env.GIFTCARD_VALID_DAYS || 90);
+export const VALID_DAYS = CONFIG.giftCardValidityDays;
+export const BULK_MIN_CARDS = CONFIG.giftCardBulkMinCards;
+export const BULK_VALID_DAYS = CONFIG.giftCardBulkValidityDays;
+// How long a card from an order of `count` cards lasts. Per single purchase, never added up
+// across purchases — 10 today and 10 next week is two ordinary orders.
+export const validDaysFor = (count) => (Number(count) >= BULK_MIN_CARDS ? BULK_VALID_DAYS : VALID_DAYS);
 export const MAX_DELIVERY_DAYS = Number(process.env.GIFTCARD_MAX_DELIVERY_DAYS || 7);
 export const EXPIRY_REMIND_DAYS = Number(process.env.GIFTCARD_EXPIRY_REMIND_DAYS || 14);
 export const EXTENSION_DAYS = Number(process.env.GIFTCARD_EXTENSION_DAYS || 30);
@@ -323,6 +328,8 @@ export function reserveBasket({ buyerName, buyerEmail, buyerPhone, items, channe
       code,
       status: STATUS.RESERVED,
       faceValue: item.value,
+      // Fixed when the order is placed, applied when it is paid (markPaid).
+      validDays: validDaysFor(normalised.length),
       // A reserved card holds NO value. Balance is money, and no money has arrived.
       balance: 0,
       currency: 'GHS',
@@ -412,7 +419,7 @@ export function markPaid(reference, { paymentRef, method = 'online', amountPaid 
     // ...and the card's own clock starts, from the moment the money arrived. Using the
     // payment date rather than the order date matters for the offline payers revived
     // below: someone who pays by transfer three days late gets a full 90 days, not 87.
-    card.expiresAt = addDays(now, VALID_DAYS);
+    card.expiresAt = addDays(now, card.validDays || VALID_DAYS);
     card.payment = { paymentRef: paymentRef || null, method, at: now, by };
     card.transactions.push({ at: now, type: 'issue', amount: card.faceValue, balance: card.balance, ref: paymentRef || null });
   }

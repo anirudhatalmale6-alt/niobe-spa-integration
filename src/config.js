@@ -179,7 +179,12 @@ export const CONFIG = {
   // Online gift-card sales (issued via GiftUp). Amounts are in GHS (the GiftUp store currency).
   giftCardMinAmount: Number(process.env.GIFTCARD_MIN || 100),
   giftCardMaxAmount: Number(process.env.GIFTCARD_MAX || 10000),
-  giftCardValidityDays: Number(process.env.GIFTCARD_VALIDITY_DAYS || 90),
+  // ONE validity setting (cards.js used to read GIFTCARD_VALID_DAYS separately — two places that
+  // could disagree). Bulk rule, client 22 Oct 2026: 20 or more cards bought in a single purchase
+  // are valid for 120 days instead of 90.
+  giftCardValidityDays: Number(process.env.GIFTCARD_VALIDITY_DAYS || process.env.GIFTCARD_VALID_DAYS || 90),
+  giftCardBulkMinCards: Number(process.env.GIFTCARD_BULK_MIN || 20),
+  giftCardBulkValidityDays: Number(process.env.GIFTCARD_BULK_VALIDITY_DAYS || 120),
   // Customer-facing service fee added to a gift-card purchase (covers GiftUp's commission +
   // card processing) — mirrors the surcharge on the GiftUp storefront. The card is worth its
   // face value; the buyer pays value x (1 + this%). Set to 0 to disable.
@@ -196,7 +201,7 @@ export const CONFIG = {
   giftCardMultiBuyDiscountPct: Number(process.env.GIFTCARD_MULTIBUY_DISCOUNT_PCT ?? 5),
   // Upper bound on cards per order. Not a business rule so much as a guard: quantity comes
   // from the browser, and it multiplies the amount charged.
-  giftCardMaxQuantity: Number(process.env.GIFTCARD_MAX_QUANTITY ?? 10),
+  giftCardMaxQuantity: Number(process.env.GIFTCARD_MAX_QUANTITY ?? 20),   // 20 so a bulk order can be placed online (22 Oct 2026)
 
   currency: process.env.CURRENCY || 'GHS',
   // Deposit rule: minimum 50% or pay in full (same across all services/branches).

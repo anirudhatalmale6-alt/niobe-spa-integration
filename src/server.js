@@ -10,7 +10,7 @@ import { getBooking, bookingDeposit, startDeposit, finalizeDeposit, listBookings
 import { startPurchase, finalizePurchase, getPurchase, giftCatalog } from './giftcards.js';
 import { sweepAll, sweepBranchReport, listHolds, startSweepLoop, secureAndConfirm } from './holds.js';
 import { startCardSweepLoop, runCardSweep } from './cardsweep.js';
-import { renderCardDesk, deskLookup, deskVoid, deskExtend, deskIssue, deskLateFee } from './carddesk.js';
+import { renderCardDesk, deskLookup, deskVoid, deskExtend, deskIssue, deskLateFee, renderCardSheet } from './carddesk.js';
 import { designs as cardDesigns } from './voucher.js';
 // The gift-card page asks giftcards.js for the catalogue, not GiftUp directly: which
 // issuer is live decides where the package list comes from, and the page must never
@@ -248,6 +248,11 @@ const server = createServer(async (req, res) => {
       } catch (e) {
         return html(res, 400, renderGiftCardPage(await giftCatalog('niobe'), e.message || 'Something went wrong.', opts));
       }
+    }
+    // The bulk-order code sheet. Under /desk/cards so it shares the card desk's staff logins.
+    if (req.method === 'GET' && p === '/desk/cards/sheet') {
+      const sheet = renderCardSheet(url.searchParams.get('ref'));
+      return sheet ? html(res, 200, sheet) : html(res, 404, 'No paid cards found for that order.');
     }
     if (p === '/desk/cards') {
       const designs = CONFIG.giftcardIssuer === 'niobe' ? cardDesigns() : [];
