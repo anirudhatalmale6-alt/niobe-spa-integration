@@ -1,4 +1,5 @@
 import { CONFIG } from './config.js';
+import { loadCertificate, tokenRequestBody } from './graphauth.js';
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -47,23 +48,29 @@ async function alertSmsCredit(detail) {
 
 let tokenCache = { value: null, exp: 0 };
 
+// Sign in with the certificate once both paths are set (IT's request, 24 Oct 2026); the secret is
+// only used while no certificate is configured. Never both: which credential is in use must be
+// obvious from the config, not from which one happened to work.
+const useCert = () => Boolean(CONFIG.graphCertPath && CONFIG.graphCertKeyPath);
+let graphCert = null;
+const loadGraphCert = () => (graphCert ||= loadCertificate(CONFIG.graphCertPath, CONFIG.graphCertKeyPath));
+export const graphAuthMode = () => (useCert() ? 'certificate' : CONFIG.graphClientSecret ? 'secret' : 'none');
+
 // Can this server send mail at all? The only gate left on email — see sendEmail.
 export function emailConfigured() {
-  return Boolean(CONFIG.graphTenantId && CONFIG.graphClientId && CONFIG.graphClientSecret && CONFIG.notifyEmailFrom);
+  return Boolean(CONFIG.graphTenantId && CONFIG.graphClientId && graphAuthMode() !== 'none' && CONFIG.notifyEmailFrom);
 }
 
-async function graphToken() {
+export async function graphToken() {
   const now = Date.now();
   if (tokenCache.value && now < tokenCache.exp - 60000) return tokenCache.value;
   const { graphTenantId, graphClientId, graphClientSecret } = CONFIG;
-  if (!graphTenantId || !graphClientId || !graphClientSecret) {
-    throw new Error('Graph email not configured (GRAPH_TENANT_ID/CLIENT_ID/CLIENT_SECRET)');
+  if (!graphTenantId || !graphClientId || graphAuthMode() === 'none') {
+    throw new Error('Graph email not configured (GRAPH_TENANT_ID/CLIENT_ID + GRAPH_CERT_PATH/KEY_PATH or CLIENT_SECRET)');
   }
-  const body = new URLSearchParams({
-    client_id: graphClientId,
-    client_secret: graphClientSecret,
-    scope: 'https://graph.microsoft.com/.default',
-    grant_type: 'client_credentials',
+  const body = tokenRequestBody({
+    tenantId: graphTenantId, clientId: graphClientId,
+    ...(useCert() ? { cert: loadGraphCert() } : { clientSecret: graphClientSecret }),
   });
   const res = await fetch(`https://login.microsoftonline.com/${graphTenantId}/oauth2/v2.0/token`, {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body,
@@ -71,6 +78,7 @@ async function graphToken() {
   const j = await res.json();
   if (!j.access_token) throw new Error(`Graph token error: ${j.error || res.status} ${j.error_description || ''}`.slice(0, 200));
   tokenCache = { value: j.access_token, exp: now + (Number(j.expires_in) || 3600) * 1000 };
+  console.log(`[notify] Microsoft Graph sign-in OK with ${useCert() ? `certificate ${graphCert.thumbprint}` : 'client secret'}`);
   return tokenCache.value;
 }
 

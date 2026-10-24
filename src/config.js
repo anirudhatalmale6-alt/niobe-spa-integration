@@ -260,6 +260,9 @@ export const CONFIG = {
   graphTenantId: process.env.GRAPH_TENANT_ID || '',
   graphClientId: process.env.GRAPH_CLIENT_ID || '',
   graphClientSecret: process.env.GRAPH_CLIENT_SECRET || '',
+  // Certificate sign-in (preferred): PEM certificate + its private key, kept outside the app folder.
+  graphCertPath: process.env.GRAPH_CERT_PATH || '',
+  graphCertKeyPath: process.env.GRAPH_CERT_KEY_PATH || '',
   // SMS via Hubtel. The SMS/Messaging API key is SEPARATE from the checkout key,
   // so use its own client id/secret; fall back to the checkout key only if unset.
   notifySmsEnabled: bool(process.env.NOTIFY_SMS_ENABLED, false),
